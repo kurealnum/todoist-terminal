@@ -6,37 +6,43 @@
 
 #define baseUrl "https://api.todoist.com/rest/v2/"
 
+char *combineString(char *str1, char *str2);
+
 int main(void) {
   printf("Current tasks\n");
   CURL *curl = curl_easy_init();
   if (curl) {
-    // setup
     char *authToken = getenv("TODOIST_AUTH_TOKEN");
 
     if (authToken == NULL) {
+      printf("Unable to find auth token.\n");
       return 1;
     }
 
-    char *authHeader = malloc(
-        (strlen("Authorization: Bearer ") + strlen(authToken)) * sizeof(char));
-    *authHeader = '\0';
-    strcat(authHeader, "Authorization: Bearer ");
-    strcat(authHeader, authToken);
-    printf("%s\n", authHeader);
+    char *authHeader = combineString("Authorization: Bearer ", authToken);
+    char *projectsUrl = combineString(baseUrl, "projects/");
 
-    /*char projectsUrl[100];*/
-    /*strcat(projectsUrl, strcat(baseUrl, projectsUrl));*/
-    /*if (authToken != NULL) {*/
-    /*  curl_easy_setopt(curl, CURLOPT_HEADER, authHeader);*/
-    /*} else {*/
-    /*  return 1;*/
-    /*}*/
-    /*curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");*/
-    /*curl_easy_setopt(curl, CURLOPT_URL, projectsUrl);*/
-    /**/
-    /*CURLcode currentTasks = curl_easy_perform(curl);*/
-    /*curl_easy_cleanup(curl);*/
+    curl_easy_setopt(curl, CURLOPT_HEADER, authHeader);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
+    curl_easy_setopt(curl, CURLOPT_URL, projectsUrl);
+
+    CURLcode currentTasks = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+
+    // free variables
     free(authHeader);
+  } else {
+    printf("curl didn't initalize correctly.\n");
   }
   curl_global_cleanup();
+}
+
+char *combineString(char *str1, char *str2) {
+  char *newString = malloc((strlen(str1) + strlen(str2) + 1) * sizeof(char));
+  if (newString == NULL) {
+    return NULL;
+  }
+  strcpy(newString, str1);
+  strcat(newString, str2);
+  return newString;
 }
