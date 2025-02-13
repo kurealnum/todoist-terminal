@@ -1,3 +1,4 @@
+#include <cjson/cJSON.h>
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <stddef.h>
@@ -27,8 +28,6 @@ static size_t curlWriteHelper(char *data, size_t size, size_t nmemb,
   size_t realsize = size * nmemb;
   struct memory *mem = (struct memory *)clientp;
 
-  printf("%lu\n", mem->size);
-
   char *ptr = realloc(mem->response, mem->size + realsize + 1);
   if (!ptr) {
     printf("Realloc ran out of memory\n");
@@ -47,10 +46,11 @@ int main(void) {
   printf("Current tasks\n");
   CURL *curl = curl_easy_init();
   CURLcode res;
-  struct memory chunk;
+  struct memory tasks;
+  struct curl_slist *list = NULL;
 
-  chunk.response = malloc(1);
-  chunk.size = 0;
+  tasks.response = malloc(1);
+  tasks.size = 0;
 
   curl_global_init(CURL_GLOBAL_DEFAULT);
 
@@ -65,26 +65,41 @@ int main(void) {
     }
 
     char *authHeader = combineString("Authorization: Bearer ", authToken);
-    char *projectsUrl = combineString(baseUrl, "projects");
+    char *tasksUrl = combineString(baseUrl, "tasks");
 
+    list = curl_slist_append(list, authHeader);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteHelper);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &authHeader);
-    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
-    curl_easy_setopt(curl, CURLOPT_URL, projectsUrl);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
+    curl_easy_setopt(curl, CURLOPT_URL, tasksUrl);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&tasks);
 
     res = curl_easy_perform(curl);
 
     if (res != CURLE_OK) {
       fprintf(stderr, "curl_easy_perform() failed: %s\n",
               curl_easy_strerror(res));
+    } else {
+      cJSON *tasksJson = cJSON_Parse(tasks.response);
+
+      if (tasksJson == NULL) {
+        const char *error_ptr = cJSON_GetErrorPtr();
+        if (error_ptr != NULL) {
+          fprintf(stderr, "Error before: %s\n", error_ptr);
+        } else {
+
+          printf("Failed to parse JSON. Error could not be shown.\n");
+        }
+      } else {
+        char *string = cJSON_Print(tasksJson);
+        printf("%s\n", string);
+      }
     }
 
     // cleanup and free variables
     curl_easy_cleanup(curl);
     free(authHeader);
-    free(projectsUrl);
-    free(chunk.response);
+    free(tasksUrl);
+    free(tasks.response);
   } else {
     printf("curl didn't initalize correctly.\n");
   }
