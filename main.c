@@ -34,7 +34,7 @@ static size_t curlWriteHelper(char *data, size_t size, size_t nmemb,
   char *ptr = realloc(mem->response, mem->size + realsize + 1);
   if (!ptr) {
     printf("Realloc ran out of memory\n");
-    return 0; /* out of memory */
+    return 0;
   }
 
   mem->response = ptr;
@@ -46,7 +46,8 @@ static size_t curlWriteHelper(char *data, size_t size, size_t nmemb,
 }
 
 // Helper function for making a request. Return value needs to be free()-ed
-cJSON *makeRequest(CURL *curl, struct curl_slist *headers, char *url) {
+cJSON *makeRequest(CURL *curl, struct curl_slist *headers, char *url,
+                   char *method) {
   struct memory requestData;
   cJSON *requestsJson;
 
@@ -57,6 +58,7 @@ cJSON *makeRequest(CURL *curl, struct curl_slist *headers, char *url) {
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&requestData);
+  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
 
   CURLcode res = curl_easy_perform(curl);
   if (res != CURLE_OK) {
@@ -70,7 +72,6 @@ cJSON *makeRequest(CURL *curl, struct curl_slist *headers, char *url) {
       if (error_ptr != NULL) {
         fprintf(stderr, "Error before: %s\n", error_ptr);
       } else {
-
         printf("Failed to parse JSON. Error could not be shown.\n");
       }
     } else {
@@ -90,6 +91,7 @@ int main(void) {
     printf("curl didn't initalize correctly.\n");
     return 1;
   } else {
+    // Get auth token from environment
     char *authToken = getenv("TODOIST_AUTH_TOKEN");
 
     if (authToken == NULL) {
@@ -99,22 +101,51 @@ int main(void) {
       return 1;
     }
 
+    char *authHeader = combineString("Authorization: Bearer ", authToken);
+    struct curl_slist *baseList = NULL;
+    baseList = curl_slist_append(baseList, authHeader);
+
+    // Query for list of currently open tasks
     struct memory tasks;
     tasks.response = malloc(1);
     tasks.size = 0;
-
-    char *authHeader = combineString("Authorization: Bearer ", authToken);
-    struct curl_slist *list = curl_slist_append(list, authHeader);
     char *tasksUrl = combineString(baseUrl, "tasks");
-    cJSON *tasksJson = makeRequest(curl, list, tasksUrl);
-    char *x = cJSON_Print(tasksJson);
+    cJSON *tasksJson = makeRequest(curl, baseList, tasksUrl, "GET");
+    // Show results to user (TODO)
+
+    // Prompt the user to mark a task as complete
+    printf("Enter the ID of a task you would like to mark as complete. \n");
+
+    // tasks/{taskID}/close
+    char *taskCompleteUrl = combineString(baseUrl, "tasks/");
+    char taskID[11];
+    scanf("%10s", taskID);
+    taskCompleteUrl = combineString(taskCompleteUrl, taskID);
+    taskCompleteUrl = combineString(taskCompleteUrl, "/close");
+
+    // Query to mark task as complete
+    struct memory markTaskCompleteRes;
+    markTaskCompleteRes.response = malloc(1);
+    markTaskCompleteRes.size = 0;
+    char *completeTaskUrl = combineString(baseUrl, taskCompleteUrl);
+    cJSON *completeTaskJson =
+        makeRequest(curl, baseList, taskCompleteUrl, "POST");
+
+    if (completeTaskJson == NULL) {
+      printf("Response is null\n");
+      return 1;
+    }
+
+    char *x = cJSON_Print(completeTaskJson);
     printf("%s\n", x);
 
-    // cleanup and free variables
+    // Cleanup and free variables
     curl_easy_cleanup(curl);
     free(authHeader);
     free(tasksUrl);
     free(tasks.response);
+    free(tasksJson);
+    free(taskCompleteUrl);
   }
   curl_global_cleanup();
 }
