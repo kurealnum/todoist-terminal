@@ -1,6 +1,7 @@
 #include <cjson/cJSON.h>
 #include <curl/curl.h>
 #include <curl/easy.h>
+#include <ncurses.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,7 +84,12 @@ cJSON *makeRequest(CURL *curl, struct curl_slist *headers, char *url,
 }
 
 int main(void) {
-  printf("Current tasks\n");
+
+  // ncurses
+  initscr();
+  printw("Current tasks\n");
+  refresh();
+
   CURL *curl = curl_easy_init();
   curl_global_init(CURL_GLOBAL_DEFAULT);
 
@@ -95,9 +101,13 @@ int main(void) {
     char *authToken = getenv("TODOIST_AUTH_TOKEN");
 
     if (authToken == NULL) {
-      printf("Unable to find auth token.\n");
+      printw(
+          "Unable to find auth token. Press any button to end the program.\n");
+      refresh();
+      getch();
       curl_easy_cleanup(curl);
       curl_global_cleanup();
+      endwin();
       return 1;
     }
 
@@ -111,33 +121,45 @@ int main(void) {
     tasks.size = 0;
     char *tasksUrl = combineString(baseUrl, "tasks");
     cJSON *tasksJson = makeRequest(curl, baseList, tasksUrl, "GET");
-    // Show results to user (TODO)
 
-    // Prompt the user to mark a task as complete
-    printf("Enter the ID of a task you would like to mark as complete. \n");
-
-    // tasks/{taskID}/close
-    char *taskCompleteUrl = combineString(baseUrl, "tasks/");
-    char taskID[11];
-    scanf("%10s", taskID);
-    taskCompleteUrl = combineString(taskCompleteUrl, taskID);
-    taskCompleteUrl = combineString(taskCompleteUrl, "/close");
-
-    // Query to mark task as complete
-    struct memory markTaskCompleteRes;
-    markTaskCompleteRes.response = malloc(1);
-    markTaskCompleteRes.size = 0;
-    char *completeTaskUrl = combineString(baseUrl, taskCompleteUrl);
-    cJSON *completeTaskJson =
-        makeRequest(curl, baseList, taskCompleteUrl, "POST");
-
-    if (completeTaskJson == NULL) {
-      printf("Response is null\n");
-      return 1;
+    // Show results to user
+    cJSON *currentTask = NULL;
+    cJSON_ArrayForEach(currentTask, tasksJson) {
+      char *content =
+          cJSON_GetObjectItemCaseSensitive(currentTask, "content")->valuestring;
+      printw("| %s |", content);
     }
 
-    char *x = cJSON_Print(completeTaskJson);
-    printf("%s\n", x);
+    printw("Query successfull. Press any button to end the program.");
+    refresh();
+    getch();
+
+    // Prompt the user to mark a task as complete
+    /*printf("Enter the ID of a task you would like to mark as complete. \n");*/
+
+    /**/
+    /*// tasks/{taskID}/close*/
+    /*char *taskCompleteUrl = combineString(baseUrl, "tasks/");*/
+    /*char taskID[11];*/
+    /*scanf("%10s", taskID);*/
+    /*taskCompleteUrl = combineString(taskCompleteUrl, taskID);*/
+    /*taskCompleteUrl = combineString(taskCompleteUrl, "/close");*/
+    /**/
+    /*// Query to mark task as complete*/
+    /*struct memory markTaskCompleteRes;*/
+    /*markTaskCompleteRes.response = malloc(1);*/
+    /*markTaskCompleteRes.size = 0;*/
+    /*char *completeTaskUrl = combineString(baseUrl, taskCompleteUrl);*/
+    /*cJSON *completeTaskJson =*/
+    /*    makeRequest(curl, baseList, taskCompleteUrl, "POST");*/
+    /**/
+    /*if (completeTaskJson == NULL) {*/
+    /*  printf("Response is null\n");*/
+    /*  return 1;*/
+    /*}*/
+    /**/
+    /*char *x = cJSON_Print(completeTaskJson);*/
+    /*printf("%s\n", x);*/
 
     // Cleanup and free variables
     curl_easy_cleanup(curl);
@@ -145,7 +167,8 @@ int main(void) {
     free(tasksUrl);
     free(tasks.response);
     free(tasksJson);
-    free(taskCompleteUrl);
+    /*free(taskCompleteUrl);*/
+    endwin();
   }
   curl_global_cleanup();
 }

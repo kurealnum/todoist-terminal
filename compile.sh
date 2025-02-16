@@ -1,1 +1,1 @@
-gcc main.c cJSON.c -o main -lcurl 
+gcc main.c cJSON.c -o main -lcurl -lncurses
