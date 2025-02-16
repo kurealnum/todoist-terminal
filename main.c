@@ -1,6 +1,9 @@
-// Ncurses is at the very least partial courtesy of Pradeep Padala:
+// Ncurses work is at the very least partial courtesy of Pradeep Padala:
 // https://tldp.org/HOWTO/NCURSES-Programming-HOWTO/index.html
 
+#include <cdk.h>
+#include <cdk/cdkscreen.h>
+#include <cdk/dialog.h>
 #include <cjson/cJSON.h>
 #include <curl/curl.h>
 #include <curl/easy.h>
@@ -98,16 +101,17 @@ int main(void) {
   initscr();
   keypad(stdscr, TRUE);
   raw();
+  noecho();
   printw("Loading current tasks. Press q to exit.\n");
   refresh();
-  int row, col;
-  getmaxyx(stdscr, row, col);
 
+  // key bindings
   const int q = 113;
   const int h = 104;
   const int j = 106;
   const int k = 107;
   const int l = 108;
+  const int space = 32;
 
   CURL *curl = curl_easy_init();
   curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -154,25 +158,28 @@ int main(void) {
     }
     menuTasks[tasksLength] = (ITEM *)NULL;
 
+    // Dialog
+    CDKSCREEN *cdkscreen;
+    cdkscreen = initCDKScreen(stdscr);
+    char *test = {"test"};
+    char **testTwo = &test;
+    CDKDIALOG *optionsDialog = newCDKDialog(cdkscreen, 0, 0, testTwo, 5,
+                                            testTwo, 1, 3, TRUE, TRUE, FALSE);
+
     MENU *tasksMenu = new_menu((ITEM **)menuTasks);
     post_menu(tasksMenu);
     refresh();
 
     int getchChar;
     while ((getchChar = getch()) != q) {
-      switch (getchChar) {
-      case KEY_DOWN:
+      if (getchChar == KEY_DOWN || getchChar == j) {
         menu_driver(tasksMenu, REQ_DOWN_ITEM);
-        break;
-      case KEY_UP:
+      } else if (getchChar == KEY_UP || getchChar == k) {
         menu_driver(tasksMenu, REQ_UP_ITEM);
-        break;
-      case j:
-        menu_driver(tasksMenu, REQ_UP_ITEM);
-        break;
-      case k:
-        menu_driver(tasksMenu, REQ_UP_ITEM);
-        break;
+      } else if (getchChar == l) {
+        ITEM *currentItem = current_item(tasksMenu);
+        drawCDKDialog(optionsDialog, TRUE);
+      } else {
       }
     }
 
@@ -215,6 +222,8 @@ int main(void) {
     }
     free_menu(tasksMenu);
     endwin();
+    destroyCDKScreen(cdkscreen);
+    endCDK();
   }
   curl_global_cleanup();
 }
