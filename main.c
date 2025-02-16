@@ -1,6 +1,11 @@
+// Ncurses is at the very least partial courtesy of Pradeep Padala:
+// https://tldp.org/HOWTO/NCURSES-Programming-HOWTO/index.html
+
 #include <cjson/cJSON.h>
 #include <curl/curl.h>
 #include <curl/easy.h>
+#include <curses.h>
+#include <menu.h>
 #include <ncurses.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -13,6 +18,10 @@
 struct memory {
   char *response;
   size_t size;
+};
+
+struct menuTask {
+  char *content;
 };
 
 // Helper function for combining two strings. Needs to be free()-ed.
@@ -87,8 +96,18 @@ int main(void) {
 
   // ncurses
   initscr();
-  printw("Current tasks\n");
+  keypad(stdscr, TRUE);
+  raw();
+  printw("Loading current tasks. Press q to exit.\n");
   refresh();
+  int row, col;
+  getmaxyx(stdscr, row, col);
+
+  const int q = 113;
+  const int h = 104;
+  const int j = 106;
+  const int k = 107;
+  const int l = 108;
 
   CURL *curl = curl_easy_init();
   curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -124,15 +143,38 @@ int main(void) {
 
     // Show results to user
     cJSON *currentTask = NULL;
-    cJSON_ArrayForEach(currentTask, tasksJson) {
-      char *content =
-          cJSON_GetObjectItemCaseSensitive(currentTask, "content")->valuestring;
-      printw("| %s |", content);
-    }
+    int tasksLength = cJSON_GetArraySize(tasksJson);
+    ITEM **menuTasks;
 
-    printw("Query successfull. Press any button to end the program.");
+    menuTasks = (ITEM **)calloc(tasksLength + 1, sizeof(struct menuTask));
+    for (int i = 0; i < tasksLength; i++) {
+      cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
+      cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, "content");
+      menuTasks[i] = new_item(curContent->valuestring, curContent->valuestring);
+    }
+    menuTasks[tasksLength] = (ITEM *)NULL;
+
+    MENU *tasksMenu = new_menu((ITEM **)menuTasks);
+    post_menu(tasksMenu);
     refresh();
-    getch();
+
+    int getchChar;
+    while ((getchChar = getch()) != q) {
+      switch (getchChar) {
+      case KEY_DOWN:
+        menu_driver(tasksMenu, REQ_DOWN_ITEM);
+        break;
+      case KEY_UP:
+        menu_driver(tasksMenu, REQ_UP_ITEM);
+        break;
+      case j:
+        menu_driver(tasksMenu, REQ_UP_ITEM);
+        break;
+      case k:
+        menu_driver(tasksMenu, REQ_UP_ITEM);
+        break;
+      }
+    }
 
     // Prompt the user to mark a task as complete
     /*printf("Enter the ID of a task you would like to mark as complete. \n");*/
@@ -160,6 +202,7 @@ int main(void) {
     /**/
     /*char *x = cJSON_Print(completeTaskJson);*/
     /*printf("%s\n", x);*/
+    /*free(taskCompleteUrl);*/
 
     // Cleanup and free variables
     curl_easy_cleanup(curl);
@@ -167,7 +210,10 @@ int main(void) {
     free(tasksUrl);
     free(tasks.response);
     free(tasksJson);
-    /*free(taskCompleteUrl);*/
+    for (int i = 0; i < tasksLength; i++) {
+      free_item(menuTasks[i]);
+    }
+    free_menu(tasksMenu);
     endwin();
   }
   curl_global_cleanup();
