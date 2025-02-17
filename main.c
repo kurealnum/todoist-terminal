@@ -1,8 +1,6 @@
 // Ncurses work is at the very least partial courtesy of Pradeep Padala:
 // https://tldp.org/HOWTO/NCURSES-Programming-HOWTO/index.html
 
-#include <cdk.h>
-#include <cdk/cdkscreen.h>
 #include <cdk/dialog.h>
 #include <cjson/cJSON.h>
 #include <curl/curl.h>
@@ -10,6 +8,7 @@
 #include <curses.h>
 #include <menu.h>
 #include <ncurses.h>
+#include <panel.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +24,13 @@ struct memory {
 
 struct menuTask {
   char *content;
+};
+
+struct curlInstructions {
+  CURL *curl;
+  struct curl_slist *headers;
+  char *method;
+  char *url;
 };
 
 // Helper function for combining two strings. Needs to be free()-ed.
@@ -59,19 +65,20 @@ static size_t curlWriteHelper(char *data, size_t size, size_t nmemb,
 }
 
 // Helper function for making a request. Return value needs to be free()-ed
-cJSON *makeRequest(CURL *curl, struct curl_slist *headers, char *url,
-                   char *method) {
+cJSON *makeRequest(struct curlInstructions curlInstructions) {
   struct memory requestData;
   cJSON *requestsJson;
 
   requestData.response = malloc(1);
   requestData.size = 0;
 
+  CURL *curl = curlInstructions.curl;
+
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteHelper);
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_URL, url);
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, curlInstructions.headers);
+  curl_easy_setopt(curl, CURLOPT_URL, curlInstructions.url);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&requestData);
-  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, curlInstructions.method);
 
   CURLcode res = curl_easy_perform(curl);
   if (res != CURLE_OK) {
@@ -95,6 +102,64 @@ cJSON *makeRequest(CURL *curl, struct curl_slist *headers, char *url,
   return requestsJson;
 }
 
+void projectPanel(struct curlInstructions curlInstructions, int row, int col) {
+  PANEL *projectPanel;
+  WINDOW *projectWindow;
+
+  // Query for list of currently open tasks
+  struct memory tasks;
+  tasks.response = malloc(1);
+  tasks.size = 0;
+  char *tasksUrl = combineString(baseUrl, "tasks");
+  cJSON *tasksJson = makeRequest(curlInstructions);
+
+  // Show results to user
+  cJSON *currentTask = NULL;
+  int tasksLength = cJSON_GetArraySize(tasksJson);
+  ITEM **menuTasks;
+
+  menuTasks = (ITEM **)calloc(tasksLength + 1, sizeof(struct menuTask));
+  for (int i = 0; i < tasksLength; i++) {
+    cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
+    cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, "content");
+    menuTasks[i] = new_item(curContent->valuestring, curContent->valuestring);
+  }
+  menuTasks[tasksLength] = (ITEM *)NULL;
+
+  // Render
+  projectWindow = newwin(row, col, 0, 0);
+  projectPanel = new_panel(projectWindow);
+  update_panels();
+  doupdate();
+
+  MENU *tasksMenu = new_menu((ITEM **)menuTasks);
+  post_menu(tasksMenu);
+  refresh();
+
+  // Event loop (of sorts)
+  int getchChar;
+  while ((getchChar = getch()) != 'q') {
+    if (getchChar == KEY_DOWN || getchChar == 'j') {
+      menu_driver(tasksMenu, REQ_DOWN_ITEM);
+    } else if (getchChar == KEY_UP || getchChar == 'k') {
+      menu_driver(tasksMenu, REQ_UP_ITEM);
+    } else if (getchChar == 'h') {
+      // Go "up"
+      ITEM *currentItem = current_item(tasksMenu);
+      hide_panel(projectPanel);
+    }
+  }
+
+  // Free variables and whatnot
+  free(tasksUrl);
+  free(tasks.response);
+  free(tasksJson);
+  for (int i = 0; i < tasksLength; i++) {
+    free_item(menuTasks[i]);
+  }
+  free_menu(tasksMenu);
+}
+
 int main(void) {
 
   // ncurses
@@ -104,14 +169,8 @@ int main(void) {
   noecho();
   printw("Loading current tasks. Press q to exit.\n");
   refresh();
-
-  // key bindings
-  const int q = 113;
-  const int h = 104;
-  const int j = 106;
-  const int k = 107;
-  const int l = 108;
-  const int space = 32;
+  int row, col;
+  getmaxyx(stdscr, row, col);
 
   CURL *curl = curl_easy_init();
   curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -138,92 +197,15 @@ int main(void) {
     struct curl_slist *baseList = NULL;
     baseList = curl_slist_append(baseList, authHeader);
 
-    // Query for list of currently open tasks
-    struct memory tasks;
-    tasks.response = malloc(1);
-    tasks.size = 0;
-    char *tasksUrl = combineString(baseUrl, "tasks");
-    cJSON *tasksJson = makeRequest(curl, baseList, tasksUrl, "GET");
+    // Get list of projects (TODO)
 
-    // Show results to user
-    cJSON *currentTask = NULL;
-    int tasksLength = cJSON_GetArraySize(tasksJson);
-    ITEM **menuTasks;
-
-    menuTasks = (ITEM **)calloc(tasksLength + 1, sizeof(struct menuTask));
-    for (int i = 0; i < tasksLength; i++) {
-      cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
-      cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, "content");
-      menuTasks[i] = new_item(curContent->valuestring, curContent->valuestring);
-    }
-    menuTasks[tasksLength] = (ITEM *)NULL;
-
-    // Dialog
-    CDKSCREEN *cdkscreen;
-    cdkscreen = initCDKScreen(stdscr);
-    char *test = {"test"};
-    char **testTwo = &test;
-    CDKDIALOG *optionsDialog = newCDKDialog(cdkscreen, 0, 0, testTwo, 5,
-                                            testTwo, 1, 3, TRUE, TRUE, FALSE);
-
-    MENU *tasksMenu = new_menu((ITEM **)menuTasks);
-    post_menu(tasksMenu);
-    refresh();
-
-    int getchChar;
-    while ((getchChar = getch()) != q) {
-      if (getchChar == KEY_DOWN || getchChar == j) {
-        menu_driver(tasksMenu, REQ_DOWN_ITEM);
-      } else if (getchChar == KEY_UP || getchChar == k) {
-        menu_driver(tasksMenu, REQ_UP_ITEM);
-      } else if (getchChar == l) {
-        ITEM *currentItem = current_item(tasksMenu);
-        drawCDKDialog(optionsDialog, TRUE);
-      } else {
-      }
-    }
-
-    // Prompt the user to mark a task as complete
-    /*printf("Enter the ID of a task you would like to mark as complete. \n");*/
-
-    /**/
-    /*// tasks/{taskID}/close*/
-    /*char *taskCompleteUrl = combineString(baseUrl, "tasks/");*/
-    /*char taskID[11];*/
-    /*scanf("%10s", taskID);*/
-    /*taskCompleteUrl = combineString(taskCompleteUrl, taskID);*/
-    /*taskCompleteUrl = combineString(taskCompleteUrl, "/close");*/
-    /**/
-    /*// Query to mark task as complete*/
-    /*struct memory markTaskCompleteRes;*/
-    /*markTaskCompleteRes.response = malloc(1);*/
-    /*markTaskCompleteRes.size = 0;*/
-    /*char *completeTaskUrl = combineString(baseUrl, taskCompleteUrl);*/
-    /*cJSON *completeTaskJson =*/
-    /*    makeRequest(curl, baseList, taskCompleteUrl, "POST");*/
-    /**/
-    /*if (completeTaskJson == NULL) {*/
-    /*  printf("Response is null\n");*/
-    /*  return 1;*/
-    /*}*/
-    /**/
-    /*char *x = cJSON_Print(completeTaskJson);*/
-    /*printf("%s\n", x);*/
-    /*free(taskCompleteUrl);*/
+    // Let user choose what project to look at (TODO -- this will involve the
+    // projectPanel function)
 
     // Cleanup and free variables
     curl_easy_cleanup(curl);
     free(authHeader);
-    free(tasksUrl);
-    free(tasks.response);
-    free(tasksJson);
-    for (int i = 0; i < tasksLength; i++) {
-      free_item(menuTasks[i]);
-    }
-    free_menu(tasksMenu);
     endwin();
-    destroyCDKScreen(cdkscreen);
-    endCDK();
   }
   curl_global_cleanup();
 }

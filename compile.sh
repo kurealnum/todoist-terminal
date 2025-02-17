@@ -1,1 +1,1 @@
-gcc main.c cJSON.c -o main -lcurl -lncurses -lmenu -lcdk
+gcc main.c cJSON.c -o main -lcurl -lncurses -lmenu -lpanel
