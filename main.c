@@ -112,7 +112,13 @@ MENU *renderMenuFromJson(cJSON *json, char *query) {
   items = (ITEM **)malloc((itemsLength + 1) * sizeof(struct ITEM *));
   for (int i = 0; i < itemsLength; i++) {
     cJSON *curItem = cJSON_GetArrayItem(json, i);
+    if (curItem == NULL) {
+      return NULL;
+    }
     cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, query);
+    if (curContent == NULL) {
+      return NULL;
+    }
     items[i] = new_item(curContent->valuestring, "");
   }
   items[itemsLength] = (ITEM *)NULL;
@@ -184,6 +190,13 @@ cJSON *getCurrentItemJson(MENU *menu, cJSON *json) {
   return currentItemJson;
 }
 
+void displayError(char *message) {
+  clear();
+  printw("%s", message);
+  refresh();
+  getch();
+}
+
 int main(void) {
   // ncurses
   initscr();
@@ -221,7 +234,7 @@ int main(void) {
     struct curl_slist *baseHeaders = NULL;
     baseHeaders = curl_slist_append(baseHeaders, authHeader);
 
-    // Get list of projects (TODO)
+    // Get list of projects
     struct memory projects;
     projects.response = malloc(1);
     projects.size = 0;
@@ -231,13 +244,35 @@ int main(void) {
     cJSON *projectsJson = makeRequest(allProjectsCurlArgs);
     int numOfProjects = cJSON_GetArraySize(projectsJson);
 
-    // Let user choose what project to look at
-    MENU *projectsMenu = renderMenuFromJson(projectsJson, "name");
-    ITEM **projectsItems = menu_items(projectsMenu);
+    // Adding a cJSON object so the user can also view active tasks (AKA the
+    // today section)
+    cJSON *today = cJSON_CreateObject();
+    if (today == NULL) {
+      goto end;
+    }
+    if (cJSON_AddStringToObject(today, "name", "Today") == NULL) {
+      goto end;
+    }
 
+    // Adding a "fake" ID field to help with managing menu (see event loop ~20
+    // lines down)
+    if (cJSON_AddStringToObject(today, "id", "999") == NULL) {
+      goto end;
+    }
+    cJSON_AddItemToArray(projectsJson, today);
+
+    MENU *projectsMenu = renderMenuFromJson(projectsJson, "name");
+    if (projectsMenu == NULL) {
+      goto end;
+    }
+
+    // Render
     clear();
     post_menu(projectsMenu);
     refresh();
+
+    // For free()-ing
+    ITEM **projectsItems = menu_items(projectsMenu);
 
     int getchChar;
     while ((getchChar = getch()) != 'q') {
@@ -251,27 +286,33 @@ int main(void) {
         // Find project ID, and call projectPanel with that project ID in a
         // curlArgs struct
         cJSON *currentItemJson = getCurrentItemJson(projectsMenu, projectsJson);
+        if (currentItemJson == NULL) {
+          displayError("Something went wrong when trying to access the current "
+                       "item of the Ncurses menu. Press any key to quit.");
+          goto end;
+        }
         cJSON *projectIDJson =
             cJSON_GetObjectItemCaseSensitive(currentItemJson, "id");
         if (projectIDJson == NULL) {
-          curl_easy_cleanup(curl);
-          free(authHeader);
-          free(projectsMenu);
-          free(projectsJson);
-          free(projects.response);
-          for (int i = 0; i < numOfProjects; i++) {
-            free(projectsItems[i]);
-          }
-          endwin();
-          printf("JSON for project ID is null.\n");
-          return 1;
+          displayError("JSON for project ID is null. Press any key to quit.");
+          goto end;
         }
+
         char *projectID = projectIDJson->valuestring;
-        char *tasksUrl = combineString(baseUrl, "tasks/?project_id=");
-        tasksUrl = combineString(tasksUrl, projectID);
+        char *tasksUrl;
+        if (strcmp(projectID, "999") == 0) {
+          tasksUrl = combineString(baseUrl, "tasks/?filter=today");
+        } else {
+          tasksUrl = combineString(baseUrl, "tasks/?project_id=");
+          tasksUrl = combineString(tasksUrl, projectID);
+        }
+
         struct curlArgs projectPanelCurlArgs = {curl, baseHeaders, "GET",
                                                 tasksUrl};
         projectPanel(projectPanelCurlArgs, row, col);
+
+        // Scuffed fix for projects list not loading after exiting from project
+        // panel
         menu_driver(projectsMenu, REQ_NEXT_ITEM);
         menu_driver(projectsMenu, REQ_PREV_ITEM);
 
@@ -280,6 +321,7 @@ int main(void) {
       }
     }
 
+  end:
     // Cleanup and free variables
     curl_easy_cleanup(curl);
     free(authHeader);
