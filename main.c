@@ -109,14 +109,14 @@ MENU *renderMenuFromJson(cJSON *json, char *query) {
   int itemsLength = cJSON_GetArraySize(json);
   ITEM **items;
 
-  items = (ITEM **)calloc(itemsLength + 1, sizeof(struct menuTask));
+  items = (ITEM **)malloc((itemsLength + 1) * sizeof(struct ITEM *));
   for (int i = 0; i < itemsLength; i++) {
     cJSON *curItem = cJSON_GetArrayItem(json, i);
     cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, query);
-    items[i] = new_item(curContent->valuestring, curContent->valuestring);
+    items[i] = new_item(curContent->valuestring, "");
   }
   items[itemsLength] = (ITEM *)NULL;
-  MENU *menu = new_menu((ITEM **)items);
+  MENU *menu = new_menu(items);
   return menu;
 }
 
@@ -136,13 +136,16 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
 
   // Get menu
   MENU *tasksMenu = renderMenuFromJson(tasksJson, "content");
-  ITEM **taskItems = menu_items(tasksMenu);
+  int menuCol = 1;
+  int *menuRow = &tasksLength;
+  int res = set_menu_format(tasksMenu, *menuRow, menuCol);
 
   // Render
   projectWindow = newwin(row, col, 0, 0);
   projectPanel = new_panel(projectWindow);
   update_panels();
   post_menu(tasksMenu);
+  wrefresh(projectWindow);
   refresh();
 
   // Event loop (ish?)
@@ -154,13 +157,17 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
       menu_driver(tasksMenu, REQ_UP_ITEM);
     } else if (getchChar == 'h') {
       // Go "up", back to the projects menu
-      ITEM *currentItem = current_item(tasksMenu);
-      hide_panel(projectPanel);
       break;
     }
   }
 
+  del_panel(projectPanel);
+  unpost_menu(tasksMenu);
+  update_panels();
+  refresh();
+
   // Free variables and whatnot
+  ITEM **taskItems = menu_items(tasksMenu);
   free(tasksUrl);
   free(tasks.response);
   free(tasksJson);
@@ -228,6 +235,7 @@ int main(void) {
     MENU *projectsMenu = renderMenuFromJson(projectsJson, "name");
     ITEM **projectsItems = menu_items(projectsMenu);
 
+    clear();
     post_menu(projectsMenu);
     refresh();
 
@@ -264,6 +272,8 @@ int main(void) {
         struct curlArgs projectPanelCurlArgs = {curl, baseHeaders, "GET",
                                                 tasksUrl};
         projectPanel(projectPanelCurlArgs, row, col);
+        menu_driver(projectsMenu, REQ_NEXT_ITEM);
+        menu_driver(projectsMenu, REQ_PREV_ITEM);
 
         // Once projectPanel returns, the user has exited the panel.
         free(tasksUrl);
