@@ -18,6 +18,7 @@
 #define baseUrl "https://api.todoist.com/rest/v2/"
 
 // Structs
+//
 struct memory {
   char *response;
   size_t size;
@@ -34,255 +35,40 @@ struct curlArgs {
   char *method;
   char *url;
 };
+//
+// End structs
 
-// Helper function for combining two strings. Needs to be free()-ed.
-char *combineString(char *str1, char *str2) {
-  char *newString = malloc((strlen(str1) + strlen(str2) + 1) * sizeof(char));
-  if (newString == NULL) {
-    return NULL;
-  }
-  strcpy(newString, str1);
-  strcat(newString, str2);
-  return newString;
-}
+// Headers
+//
+
+// Helper function for combining two strings. Return value needs to be
+// free()-ed.
+char *combineString(char *str1, char *str2);
 
 // Helper function for writing with curl
 static size_t curlWriteHelper(char *data, size_t size, size_t nmemb,
-                              void *clientp) {
-  size_t realsize = size * nmemb;
-  struct memory *mem = (struct memory *)clientp;
+                              void *clientp);
 
-  char *ptr = realloc(mem->response, mem->size + realsize + 1);
-  if (!ptr) {
-    printf("Realloc ran out of memory\n");
-    return 0;
-  }
-
-  mem->response = ptr;
-  memcpy(&(mem->response[mem->size]), data, realsize);
-  mem->size += realsize;
-  mem->response[mem->size] = 0;
-
-  return realsize;
-}
-
-void displayError(char *message) {
-  clear();
-  printw("%s", message);
-  refresh();
-  getch();
-  clear();
-}
+// Displays a message to the user and awaits a keypress before remove itself.
+// Clears the ncurses window
+void displayMessage(char *message);
 
 // Helper function for making a request. Return value needs to be free()-ed
-cJSON *makeRequest(struct curlArgs curlArgs) {
-  struct memory requestData;
-  cJSON *requestsJson;
+cJSON *makeRequest(struct curlArgs curlArgs);
 
-  requestData.response = malloc(1);
-  requestData.size = 0;
-
-  CURL *curl = curlArgs.curl;
-
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteHelper);
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, curlArgs.headers);
-  curl_easy_setopt(curl, CURLOPT_URL, curlArgs.url);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&requestData);
-  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, curlArgs.method);
-
-  CURLcode res = curl_easy_perform(curl);
-  if (res != CURLE_OK) {
-    displayError("curl_easy_perform() failed.");
-  } else {
-    long httpCode = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-
-    if (httpCode == 204) {
-      cJSON *blank = cJSON_CreateArray();
-      return blank;
-    }
-
-    requestsJson = cJSON_Parse(requestData.response);
-
-    if (requestsJson == NULL) {
-      const char *error_ptr = cJSON_GetErrorPtr();
-      if (error_ptr != NULL) {
-        clear();
-        printw("%s", error_ptr);
-        refresh();
-        getch();
-        clear();
-      } else {
-        displayError("Failed to parse JSON. Error could not be shown.");
-      }
-    } else {
-      return requestsJson;
-    }
-  }
-
-  return requestsJson;
-}
-
-// Renders a menu. Must be free()-ed when finished using
-MENU *renderMenuFromJson(cJSON *json, char *query) {
-  cJSON *currentTask = NULL;
-  int itemsLength = cJSON_GetArraySize(json);
-  ITEM **items;
-
-  items = (ITEM **)malloc((itemsLength + 1) * sizeof(struct ITEM *));
-  for (int i = 0; i < itemsLength; i++) {
-    cJSON *curItem = cJSON_GetArrayItem(json, i);
-    if (curItem == NULL) {
-      return NULL;
-    }
-    cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, query);
-    if (curContent == NULL) {
-      return NULL;
-    }
-    items[i] = new_item(curContent->valuestring, "");
-  }
-  items[itemsLength] = (ITEM *)NULL;
-  MENU *menu = new_menu(items);
-  return menu;
-}
-
-cJSON *getCurrentItemJson(MENU *menu, cJSON *json) {
-  ITEM *currentItem = current_item(menu);
-  int currentItemIndex = item_index(currentItem);
-  cJSON *currentItemJson = cJSON_GetArrayItem(json, currentItemIndex);
-  return currentItemJson;
-}
+// Returns a menu. Must be free()-ed
+MENU *renderMenuFromJson(cJSON *json, char *query);
 
 // Function for rendering a certain project's tasks. Check out Todoist itself
 // for a little bit more insight on how this is set up.
-void projectPanel(struct curlArgs curlArgs, int row, int col) {
-  PANEL *projectPanel;
-  WINDOW *projectWindow;
+void projectPanel(struct curlArgs curlArgs, int row, int col);
 
-  // Query for list of currently open tasks
-  char *tasksUrl = combineString(baseUrl, "tasks");
-  cJSON *tasksJson = makeRequest(curlArgs);
-  int tasksLength = cJSON_GetArraySize(tasksJson);
-
-  // Get menu
-  MENU *tasksMenu = renderMenuFromJson(tasksJson, "content");
-  int menuCol = 1;
-  int *menuRow = &tasksLength;
-  int res = set_menu_format(tasksMenu, *menuRow, menuCol);
-
-  // Render
-  projectWindow = newwin(row, col, 0, 0);
-  projectPanel = new_panel(projectWindow);
-  update_panels();
-  post_menu(tasksMenu);
-  wrefresh(projectWindow);
-  refresh();
-
-  // Event loop (ish?)
-  int getchChar;
-  while ((getchChar = getch()) != 'q') {
-    if (getchChar == KEY_DOWN || getchChar == 'j') {
-      menu_driver(tasksMenu, REQ_DOWN_ITEM);
-    } else if (getchChar == KEY_UP || getchChar == 'k') {
-      menu_driver(tasksMenu, REQ_UP_ITEM);
-    } else if (getchChar == 'h') {
-      // Go "up", back to the projects menu
-      break;
-    } else if (getchChar == 'p') {
-      // Mark item as completed
-      cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
-      ITEM *currentItem = current_item(tasksMenu);
-      if (currentItemJson == NULL) {
-        displayError("Something went wrong when closing the task. Press any "
-                     "key to return to the projects menu.");
-        return;
-      }
-      cJSON *currentItemIdJson =
-          cJSON_GetObjectItemCaseSensitive(currentItemJson, "id");
-      if (currentItemIdJson == NULL) {
-        displayError("Something went wrong when closing the task. Press any "
-                     "key to return to the projects menu.");
-        return;
-      }
-      char *currentItemId = currentItemIdJson->valuestring;
-      if (currentItemId == NULL) {
-        displayError("Something went wrong when closing the task. Press any "
-                     "key to return to the projects menu.");
-        return;
-      }
-      char *closeTaskUrl = (char *)malloc(100);
-      strcpy(closeTaskUrl, baseUrl);
-      strcat(closeTaskUrl, "tasks/");
-      strcat(closeTaskUrl, currentItemId);
-      strcat(closeTaskUrl, "/close");
-
-      struct curlArgs markCompleteArgs = {curlArgs.curl, curlArgs.headers,
-                                          "POST", closeTaskUrl};
-      cJSON *markCompleteJson = makeRequest(markCompleteArgs);
-      free(closeTaskUrl);
-      if (markCompleteJson == NULL) {
-        displayError("Something went wrong when making an API request to close "
-                     "the task. Press any key to return to the projects menu.");
-        return;
-      }
-
-      // If it isn't null, the request was successfull, so we can update the
-      // menu.
-      // Free old items first
-      ITEM **taskItems = menu_items(tasksMenu);
-      for (int i = 0; i < tasksLength; i++) {
-        free_item(taskItems[i]);
-      }
-
-      unpost_menu(tasksMenu);
-
-      // Delete completed task
-      int completedTaskIndex = item_index(currentItem);
-      cJSON_DeleteItemFromArray(tasksJson, completedTaskIndex);
-
-      // Create new items (will need to be free()-ed)
-      int newItemsLength = cJSON_GetArraySize(tasksJson);
-      ITEM **newItems =
-          (ITEM **)malloc((newItemsLength + 1) * sizeof(struct ITEM *));
-      for (int i = 0; i < newItemsLength; i++) {
-        cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
-        if (curItem == NULL) {
-          displayError("Something went wrong when updating the Ncurses menu."
-                       "Press any key to return to the projects menu. (Err 1)");
-          return;
-        }
-        cJSON *curContent =
-            cJSON_GetObjectItemCaseSensitive(curItem, "content");
-        if (curContent == NULL) {
-          displayError("Something went wrong when updating the Ncurses menu."
-                       "Press any key to return to the projects menu. (Err 2)");
-          return;
-        }
-        newItems[i] = new_item(curContent->valuestring, "");
-      }
-      newItems[newItemsLength] = (ITEM *)NULL;
-
-      // Re-render menu
-      set_menu_items(tasksMenu, newItems);
-      post_menu(tasksMenu);
-      refresh();
-    }
-  }
-
-  del_panel(projectPanel);
-  unpost_menu(tasksMenu);
-  update_panels();
-  refresh();
-
-  // Free variables and whatnot
-  ITEM **taskItems = menu_items(tasksMenu);
-  free(tasksUrl);
-  free(tasksJson);
-  for (int i = 0; i < tasksLength; i++) {
-    free_item(taskItems[i]);
-  }
-  free_menu(tasksMenu);
-}
+// Helper function. Given a menu and a cJSON array, it returns the currently
+// selected item as a cJSON struct. The cJSON array and menu items need to be
+// the same length and in the same order
+cJSON *getCurrentItemJson(MENU *menu, cJSON *json);
+//
+// End Headers
 
 int main(void) {
   // ncurses
@@ -374,14 +160,15 @@ int main(void) {
         // curlArgs struct
         cJSON *currentItemJson = getCurrentItemJson(projectsMenu, projectsJson);
         if (currentItemJson == NULL) {
-          displayError("Something went wrong when trying to access the current "
-                       "item of the Ncurses menu. Press any key to quit.");
+          displayMessage(
+              "Something went wrong when trying to access the current "
+              "item of the Ncurses menu. Press any key to quit.");
           goto end;
         }
         cJSON *projectIDJson =
             cJSON_GetObjectItemCaseSensitive(currentItemJson, "id");
         if (projectIDJson == NULL) {
-          displayError("JSON for project ID is null. Press any key to quit.");
+          displayMessage("JSON for project ID is null. Press any key to quit.");
           goto end;
         }
 
@@ -421,4 +208,250 @@ int main(void) {
     endwin();
   }
   curl_global_cleanup();
+}
+
+char *combineString(char *str1, char *str2) {
+  char *newString = malloc((strlen(str1) + strlen(str2) + 1) * sizeof(char));
+  if (newString == NULL) {
+    return NULL;
+  }
+  strcpy(newString, str1);
+  strcat(newString, str2);
+  return newString;
+}
+
+static size_t curlWriteHelper(char *data, size_t size, size_t nmemb,
+                              void *clientp) {
+  size_t realsize = size * nmemb;
+  struct memory *mem = (struct memory *)clientp;
+
+  char *ptr = realloc(mem->response, mem->size + realsize + 1);
+  if (!ptr) {
+    printf("Realloc ran out of memory\n");
+    return 0;
+  }
+
+  mem->response = ptr;
+  memcpy(&(mem->response[mem->size]), data, realsize);
+  mem->size += realsize;
+  mem->response[mem->size] = 0;
+
+  return realsize;
+}
+
+void displayMessage(char *message) {
+  clear();
+  printw("%s", message);
+  refresh();
+  getch();
+  clear();
+}
+
+cJSON *makeRequest(struct curlArgs curlArgs) {
+  struct memory requestData;
+  cJSON *requestsJson;
+
+  requestData.response = malloc(1);
+  requestData.size = 0;
+
+  CURL *curl = curlArgs.curl;
+
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteHelper);
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, curlArgs.headers);
+  curl_easy_setopt(curl, CURLOPT_URL, curlArgs.url);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&requestData);
+  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, curlArgs.method);
+
+  CURLcode res = curl_easy_perform(curl);
+  if (res != CURLE_OK) {
+    displayMessage("curl_easy_perform() failed.");
+  } else {
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+    if (httpCode == 204) {
+      cJSON *blank = cJSON_CreateArray();
+      return blank;
+    }
+
+    requestsJson = cJSON_Parse(requestData.response);
+
+    if (requestsJson == NULL) {
+      const char *error_ptr = cJSON_GetErrorPtr();
+      if (error_ptr != NULL) {
+        clear();
+        printw("%s", error_ptr);
+        refresh();
+        getch();
+        clear();
+      } else {
+        displayMessage("Failed to parse JSON. Error could not be shown.");
+      }
+    } else {
+      return requestsJson;
+    }
+  }
+
+  return requestsJson;
+}
+
+MENU *renderMenuFromJson(cJSON *json, char *query) {
+  cJSON *currentTask = NULL;
+  int itemsLength = cJSON_GetArraySize(json);
+  ITEM **items;
+
+  items = (ITEM **)malloc((itemsLength + 1) * sizeof(struct ITEM *));
+  for (int i = 0; i < itemsLength; i++) {
+    cJSON *curItem = cJSON_GetArrayItem(json, i);
+    if (curItem == NULL) {
+      return NULL;
+    }
+    cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, query);
+    if (curContent == NULL) {
+      return NULL;
+    }
+    items[i] = new_item(curContent->valuestring, "");
+  }
+  items[itemsLength] = (ITEM *)NULL;
+  MENU *menu = new_menu(items);
+  return menu;
+}
+
+cJSON *getCurrentItemJson(MENU *menu, cJSON *json) {
+  ITEM *currentItem = current_item(menu);
+  int currentItemIndex = item_index(currentItem);
+  cJSON *currentItemJson = cJSON_GetArrayItem(json, currentItemIndex);
+  return currentItemJson;
+}
+
+void projectPanel(struct curlArgs curlArgs, int row, int col) {
+  PANEL *projectPanel;
+  WINDOW *projectWindow;
+
+  // Query for list of currently open tasks
+  char *tasksUrl = combineString(baseUrl, "tasks");
+  cJSON *tasksJson = makeRequest(curlArgs);
+  int tasksLength = cJSON_GetArraySize(tasksJson);
+
+  // Get menu
+  MENU *tasksMenu = renderMenuFromJson(tasksJson, "content");
+  int menuCol = 1;
+  int *menuRow = &tasksLength;
+  int res = set_menu_format(tasksMenu, *menuRow, menuCol);
+
+  // Render
+  projectWindow = newwin(row, col, 0, 0);
+  projectPanel = new_panel(projectWindow);
+  update_panels();
+  post_menu(tasksMenu);
+  wrefresh(projectWindow);
+  refresh();
+
+  // Event loop (ish?)
+  int getchChar;
+  while ((getchChar = getch()) != 'q') {
+    if (getchChar == KEY_DOWN || getchChar == 'j') {
+      menu_driver(tasksMenu, REQ_DOWN_ITEM);
+    } else if (getchChar == KEY_UP || getchChar == 'k') {
+      menu_driver(tasksMenu, REQ_UP_ITEM);
+    } else if (getchChar == 'h') {
+      // Go "up", back to the projects menu
+      break;
+    } else if (getchChar == 'p') {
+      // Mark item as completed
+      cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
+      ITEM *currentItem = current_item(tasksMenu);
+      if (currentItemJson == NULL) {
+        displayMessage("Something went wrong when closing the task. Press any "
+                       "key to return to the projects menu.");
+        return;
+      }
+      cJSON *currentItemIdJson =
+          cJSON_GetObjectItemCaseSensitive(currentItemJson, "id");
+      if (currentItemIdJson == NULL) {
+        displayMessage("Something went wrong when closing the task. Press any "
+                       "key to return to the projects menu.");
+        return;
+      }
+      char *currentItemId = currentItemIdJson->valuestring;
+      if (currentItemId == NULL) {
+        displayMessage("Something went wrong when closing the task. Press any "
+                       "key to return to the projects menu.");
+        return;
+      }
+      char *closeTaskUrl = (char *)malloc(100);
+      strcpy(closeTaskUrl, baseUrl);
+      strcat(closeTaskUrl, "tasks/");
+      strcat(closeTaskUrl, currentItemId);
+      strcat(closeTaskUrl, "/close");
+
+      struct curlArgs markCompleteArgs = {curlArgs.curl, curlArgs.headers,
+                                          "POST", closeTaskUrl};
+      cJSON *markCompleteJson = makeRequest(markCompleteArgs);
+      free(closeTaskUrl);
+      if (markCompleteJson == NULL) {
+        displayMessage(
+            "Something went wrong when making an API request to close "
+            "the task. Press any key to return to the projects menu.");
+        return;
+      }
+
+      // If it isn't null, the request was successfull, so we can update the
+      // menu.
+      // Free old items first
+      ITEM **taskItems = menu_items(tasksMenu);
+      for (int i = 0; i < tasksLength; i++) {
+        free_item(taskItems[i]);
+      }
+
+      unpost_menu(tasksMenu);
+
+      // Delete completed task
+      int completedTaskIndex = item_index(currentItem);
+      cJSON_DeleteItemFromArray(tasksJson, completedTaskIndex);
+
+      // Create new items (will need to be free()-ed)
+      int newItemsLength = cJSON_GetArraySize(tasksJson);
+      ITEM **newItems =
+          (ITEM **)malloc((newItemsLength + 1) * sizeof(struct ITEM *));
+      for (int i = 0; i < newItemsLength; i++) {
+        cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
+        if (curItem == NULL) {
+          displayMessage(
+              "Something went wrong when updating the Ncurses menu."
+              "Press any key to return to the projects menu. (Err 1)");
+          return;
+        }
+        cJSON *curContent =
+            cJSON_GetObjectItemCaseSensitive(curItem, "content");
+        if (curContent == NULL) {
+          displayMessage(
+              "Something went wrong when updating the Ncurses menu."
+              "Press any key to return to the projects menu. (Err 2)");
+          return;
+        }
+        newItems[i] = new_item(curContent->valuestring, "");
+      }
+      newItems[newItemsLength] = (ITEM *)NULL;
+
+      // Re-render menu
+      set_menu_items(tasksMenu, newItems);
+      post_menu(tasksMenu);
+      refresh();
+    }
+  }
+
+  del_panel(projectPanel);
+  unpost_menu(tasksMenu);
+  update_panels();
+  refresh();
+
+  // Free variables and whatnot
+  ITEM **taskItems = menu_items(tasksMenu);
+  free(tasksUrl);
+  free(tasksJson);
+  for (int i = 0; i < tasksLength; i++) {
+    free_item(taskItems[i]);
+  }
+  free_menu(tasksMenu);
 }
