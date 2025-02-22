@@ -76,6 +76,13 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs);
 
 // Helper function. See source.
 void setItemsAndRepostMenu(MENU *menu, ITEM **items);
+
+// Helper function to get the value from a JSON object
+char *getJsonValue(cJSON *json, char *key);
+
+// Similar logic to closeTask. We don't have to return anything, because there's
+// no UI changes to make.
+boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs);
 //
 // End Headers
 
@@ -102,8 +109,8 @@ int main(void) {
     char *authToken = getenv("TODOIST_AUTH_TOKEN");
 
     if (authToken == NULL) {
-      printw(
-          "Unable to find auth token. Press any button to end the program.\n");
+      printw("Unable to find auth token. Press any button to end the "
+             "program.\n");
       refresh();
       getch();
       curl_easy_cleanup(curl);
@@ -194,8 +201,8 @@ int main(void) {
                                                 tasksUrl};
         projectPanel(projectPanelCurlArgs, row, col);
 
-        // Scuffed fix for projects list not loading after exiting from project
-        // panel
+        // Scuffed fix for projects list not loading after exiting from
+        // project panel
         menu_driver(projectsMenu, REQ_NEXT_ITEM);
         menu_driver(projectsMenu, REQ_PREV_ITEM);
 
@@ -366,7 +373,7 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
   wrefresh(projectWindow);
   refresh();
 
-  // Event loop (ish?)
+  // Event loop (ish?). Think of 'break' as going back to the projects menu.
   int getchChar;
   while ((getchChar = getch()) != 'q') {
     if (getchChar == KEY_DOWN || getchChar == 'j') {
@@ -374,13 +381,18 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
     } else if (getchChar == KEY_UP || getchChar == 'k') {
       menu_driver(tasksMenu, REQ_UP_ITEM);
     } else if (getchChar == 'h') {
-      // Go "up", back to the projects menu
       break;
     } else if (getchChar == 'p') {
-      // Re-render menu if
       ITEM **newItems = closeTask(tasksJson, tasksMenu, curlArgs);
+      if (newItems == NULL) {
+        break;
+      }
       setItemsAndRepostMenu(tasksMenu, newItems);
       refresh();
+    } else if (getchChar == 'o') {
+      if (!reopenTask(tasksJson, tasksMenu, curlArgs)) {
+        break;
+      };
     }
   }
 
@@ -405,8 +417,54 @@ void setItemsAndRepostMenu(MENU *menu, ITEM **items) {
   post_menu(menu);
 }
 
+char *getJsonValue(cJSON *json, char *key) {
+  cJSON *keyValuePair = cJSON_GetObjectItemCaseSensitive(json, key);
+  if (keyValuePair == NULL) {
+    displayMessage("Something went wrong when closing the task. Press any "
+                   "key to return to the projects menu.");
+    return NULL;
+  }
+  char *value = keyValuePair->valuestring;
+  if (value == NULL) {
+    displayMessage("Something went wrong when closing the task. Press any "
+                   "key to return to the projects menu.");
+    return NULL;
+  }
+
+  return value;
+}
+
+boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
+                   struct curlArgs curlArgs) {
+  ITEM *currentItem = current_item(tasksMenu);
+  cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
+  char *currentItemId = getJsonValue(currentItemJson, "id");
+  if (currentItemId == NULL) {
+    displayMessage("Something went wrong when closing the task. Press any key "
+                   "to return to the projects menu.");
+    return false;
+  }
+  char *reopenTaskUrl = (char *)malloc(100);
+  strcpy(reopenTaskUrl, BASE_URL);
+  strcat(reopenTaskUrl, "tasks/");
+  strcat(reopenTaskUrl, currentItemId);
+  strcat(reopenTaskUrl, "/reopen");
+
+  struct curlArgs reopenTaskArgs = {curlArgs.curl, curlArgs.headers, "POST",
+                                    reopenTaskUrl};
+  cJSON *result = makeRequest(reopenTaskArgs);
+
+  free(reopenTaskUrl);
+  if (result == NULL) {
+    displayMessage("Something went wrong when making the request to close the "
+                   "task. Press any key to return to the projects menu.");
+    return false;
+  }
+
+  return true;
+}
+
 ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
-  // Mark item as completed
   ITEM *currentItem = current_item(tasksMenu);
 
   // Possibly hacky solution -- if there are no items to complete, just return
@@ -420,17 +478,10 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
                    "key to return to the projects menu.");
     return NULL;
   }
-  cJSON *currentItemIdJson =
-      cJSON_GetObjectItemCaseSensitive(currentItemJson, "id");
-  if (currentItemIdJson == NULL) {
-    displayMessage("Something went wrong when closing the task. Press any "
-                   "key to return to the projects menu.");
-    return NULL;
-  }
-  char *currentItemId = currentItemIdJson->valuestring;
+  char *currentItemId = getJsonValue(currentItemJson, "id");
   if (currentItemId == NULL) {
-    displayMessage("Something went wrong when closing the task. Press any "
-                   "key to return to the projects menu.");
+    displayMessage("Something went wrong when closing the task. Press any key "
+                   "to return to the projects menu.");
     return NULL;
   }
   char *closeTaskUrl = (char *)malloc(100);
