@@ -1,6 +1,7 @@
 // Ncurses work is at the very least partial courtesy of Pradeep Padala:
 // https://tldp.org/HOWTO/NCURSES-Programming-HOWTO/index.html
 
+#include <cdk.h>
 #include <cdk/dialog.h>
 #include <cjson/cJSON.h>
 #include <curl/curl.h>
@@ -15,7 +16,9 @@
 #include <string.h>
 #include <unistd.h>
 
-#define baseUrl "https://api.todoist.com/rest/v2/"
+#define BASE_URL "https://api.todoist.com/rest/v2/"
+#define NO_TASKS_TO_COMPLETE_MESSAGE                                           \
+  "No tasks left to complete! Have a good day!"
 
 // Structs
 //
@@ -67,6 +70,12 @@ void projectPanel(struct curlArgs curlArgs, int row, int col);
 // selected item as a cJSON struct. The cJSON array and menu items need to be
 // the same length and in the same order
 cJSON *getCurrentItemJson(MENU *menu, cJSON *json);
+
+// Closes a task, and returns the updated list of items
+ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs);
+
+// Helper function. See source.
+void setItemsAndRepostMenu(MENU *menu, ITEM **items);
 //
 // End Headers
 
@@ -111,7 +120,7 @@ int main(void) {
     struct memory projects;
     projects.response = malloc(1);
     projects.size = 0;
-    char *allProjectsUrl = combineString(baseUrl, "projects");
+    char *allProjectsUrl = combineString(BASE_URL, "projects");
     struct curlArgs allProjectsCurlArgs = {curl, baseHeaders, "GET",
                                            allProjectsUrl};
     cJSON *projectsJson = makeRequest(allProjectsCurlArgs);
@@ -175,9 +184,9 @@ int main(void) {
         char *projectID = projectIDJson->valuestring;
         char *tasksUrl;
         if (strcmp(projectID, "999") == 0) {
-          tasksUrl = combineString(baseUrl, "tasks/?filter=today");
+          tasksUrl = combineString(BASE_URL, "tasks/?filter=today");
         } else {
-          tasksUrl = combineString(baseUrl, "tasks/?project_id=");
+          tasksUrl = combineString(BASE_URL, "tasks/?project_id=");
           tasksUrl = combineString(tasksUrl, projectID);
         }
 
@@ -298,6 +307,16 @@ cJSON *makeRequest(struct curlArgs curlArgs) {
 MENU *renderMenuFromJson(cJSON *json, char *query) {
   cJSON *currentTask = NULL;
   int itemsLength = cJSON_GetArraySize(json);
+
+  // QOL
+  if (itemsLength == 0) {
+    ITEM **blankItems = (ITEM **)malloc(2 * sizeof(struct ITEM *));
+    blankItems[0] = new_item(NO_TASKS_TO_COMPLETE_MESSAGE, "");
+    blankItems[1] = (ITEM *)NULL;
+    MENU *blankMenu = new_menu(blankItems);
+    return blankMenu;
+  }
+
   ITEM **items;
 
   items = (ITEM **)malloc((itemsLength + 1) * sizeof(struct ITEM *));
@@ -329,7 +348,7 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
   WINDOW *projectWindow;
 
   // Query for list of currently open tasks
-  char *tasksUrl = combineString(baseUrl, "tasks");
+  char *tasksUrl = combineString(BASE_URL, "tasks");
   cJSON *tasksJson = makeRequest(curlArgs);
   int tasksLength = cJSON_GetArraySize(tasksJson);
 
@@ -358,85 +377,9 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
       // Go "up", back to the projects menu
       break;
     } else if (getchChar == 'p') {
-      // Mark item as completed
-      cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
-      ITEM *currentItem = current_item(tasksMenu);
-      if (currentItemJson == NULL) {
-        displayMessage("Something went wrong when closing the task. Press any "
-                       "key to return to the projects menu.");
-        return;
-      }
-      cJSON *currentItemIdJson =
-          cJSON_GetObjectItemCaseSensitive(currentItemJson, "id");
-      if (currentItemIdJson == NULL) {
-        displayMessage("Something went wrong when closing the task. Press any "
-                       "key to return to the projects menu.");
-        return;
-      }
-      char *currentItemId = currentItemIdJson->valuestring;
-      if (currentItemId == NULL) {
-        displayMessage("Something went wrong when closing the task. Press any "
-                       "key to return to the projects menu.");
-        return;
-      }
-      char *closeTaskUrl = (char *)malloc(100);
-      strcpy(closeTaskUrl, baseUrl);
-      strcat(closeTaskUrl, "tasks/");
-      strcat(closeTaskUrl, currentItemId);
-      strcat(closeTaskUrl, "/close");
-
-      struct curlArgs markCompleteArgs = {curlArgs.curl, curlArgs.headers,
-                                          "POST", closeTaskUrl};
-      cJSON *markCompleteJson = makeRequest(markCompleteArgs);
-      free(closeTaskUrl);
-      if (markCompleteJson == NULL) {
-        displayMessage(
-            "Something went wrong when making an API request to close "
-            "the task. Press any key to return to the projects menu.");
-        return;
-      }
-
-      // If it isn't null, the request was successfull, so we can update the
-      // menu.
-      // Free old items first
-      ITEM **taskItems = menu_items(tasksMenu);
-      for (int i = 0; i < tasksLength; i++) {
-        free_item(taskItems[i]);
-      }
-
-      unpost_menu(tasksMenu);
-
-      // Delete completed task
-      int completedTaskIndex = item_index(currentItem);
-      cJSON_DeleteItemFromArray(tasksJson, completedTaskIndex);
-
-      // Create new items (will need to be free()-ed)
-      int newItemsLength = cJSON_GetArraySize(tasksJson);
-      ITEM **newItems =
-          (ITEM **)malloc((newItemsLength + 1) * sizeof(struct ITEM *));
-      for (int i = 0; i < newItemsLength; i++) {
-        cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
-        if (curItem == NULL) {
-          displayMessage(
-              "Something went wrong when updating the Ncurses menu."
-              "Press any key to return to the projects menu. (Err 1)");
-          return;
-        }
-        cJSON *curContent =
-            cJSON_GetObjectItemCaseSensitive(curItem, "content");
-        if (curContent == NULL) {
-          displayMessage(
-              "Something went wrong when updating the Ncurses menu."
-              "Press any key to return to the projects menu. (Err 2)");
-          return;
-        }
-        newItems[i] = new_item(curContent->valuestring, "");
-      }
-      newItems[newItemsLength] = (ITEM *)NULL;
-
-      // Re-render menu
-      set_menu_items(tasksMenu, newItems);
-      post_menu(tasksMenu);
+      // Re-render menu if
+      ITEM **newItems = closeTask(tasksJson, tasksMenu, curlArgs);
+      setItemsAndRepostMenu(tasksMenu, newItems);
       refresh();
     }
   }
@@ -454,4 +397,103 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
     free_item(taskItems[i]);
   }
   free_menu(tasksMenu);
+}
+
+void setItemsAndRepostMenu(MENU *menu, ITEM **items) {
+  unpost_menu(menu);
+  set_menu_items(menu, items);
+  post_menu(menu);
+}
+
+ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
+  // Mark item as completed
+  ITEM *currentItem = current_item(tasksMenu);
+
+  // Possibly hacky solution -- if there are no items to complete, just return
+  if (strcmp(item_name(currentItem), NO_TASKS_TO_COMPLETE_MESSAGE) == 0) {
+    return menu_items(tasksMenu);
+  }
+
+  cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
+  if (currentItemJson == NULL) {
+    displayMessage("Something went wrong when closing the task. Press any "
+                   "key to return to the projects menu.");
+    return NULL;
+  }
+  cJSON *currentItemIdJson =
+      cJSON_GetObjectItemCaseSensitive(currentItemJson, "id");
+  if (currentItemIdJson == NULL) {
+    displayMessage("Something went wrong when closing the task. Press any "
+                   "key to return to the projects menu.");
+    return NULL;
+  }
+  char *currentItemId = currentItemIdJson->valuestring;
+  if (currentItemId == NULL) {
+    displayMessage("Something went wrong when closing the task. Press any "
+                   "key to return to the projects menu.");
+    return NULL;
+  }
+  char *closeTaskUrl = (char *)malloc(100);
+  strcpy(closeTaskUrl, BASE_URL);
+  strcat(closeTaskUrl, "tasks/");
+  strcat(closeTaskUrl, currentItemId);
+  strcat(closeTaskUrl, "/close");
+
+  struct curlArgs markCompleteArgs = {curlArgs.curl, curlArgs.headers, "POST",
+                                      closeTaskUrl};
+  cJSON *markCompleteJson = makeRequest(markCompleteArgs);
+  free(closeTaskUrl);
+  if (markCompleteJson == NULL) {
+    displayMessage("Something went wrong when making an API request to close "
+                   "the task. Press any key to return to the projects menu.");
+    return NULL;
+  }
+
+  // If it isn't null, the request was successfull, so we can update the
+  // menu.
+  // Free old items first
+  int tasksLength = cJSON_GetArraySize(tasksJson);
+
+  // If there's not going to be anything in the ITEM ** return anyways, don't
+  // bother doing anything. Also helps avoid an annoying bug where, when
+  // completing the last item of the list, the user will be left with random
+  // characters instead of a blank menu.
+  if (tasksLength - 1 == 0) {
+    ITEM **blankItems = (ITEM **)malloc(2 * sizeof(struct ITEM *));
+    blankItems[0] = new_item(NO_TASKS_TO_COMPLETE_MESSAGE, "");
+    blankItems[1] = (ITEM *)NULL;
+    return blankItems;
+  }
+
+  ITEM **taskItems = menu_items(tasksMenu);
+  for (int i = 0; i < tasksLength; i++) {
+    free_item(taskItems[i]);
+  }
+
+  // Delete completed task
+  int completedTaskIndex = item_index(currentItem);
+  cJSON_DeleteItemFromArray(tasksJson, completedTaskIndex);
+
+  // Create new items (will need to be free()-ed)
+  int newItemsLength = cJSON_GetArraySize(tasksJson);
+  ITEM **newItems =
+      (ITEM **)malloc((newItemsLength + 1) * sizeof(struct ITEM *));
+  for (int i = 0; i < newItemsLength; i++) {
+    cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
+    if (curItem == NULL) {
+      displayMessage("Something went wrong when updating the Ncurses menu."
+                     "Press any key to return to the projects menu. (Err 1)");
+      return NULL;
+    }
+    cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, "content");
+    if (curContent == NULL) {
+      displayMessage("Something went wrong when updating the Ncurses menu."
+                     "Press any key to return to the projects menu. (Err 2)");
+      return NULL;
+    }
+    newItems[i] = new_item(curContent->valuestring, "");
+  }
+  newItems[newItemsLength] = (ITEM *)NULL;
+
+  return newItems;
 }
