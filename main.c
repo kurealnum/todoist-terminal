@@ -15,8 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <uuid/uuid.h>
 
-#define BASE_URL "https://api.todoist.com/rest/v2/"
+#define BASE_REST_URL "https://api.todoist.com/rest/v2/"
+#define BASE_SYNC_URL "https://api.todoist.com/sync/v9/sync"
 #define NO_TASKS_TO_COMPLETE_MESSAGE                                           \
   "No tasks left to complete! Have a good day!"
 
@@ -37,6 +39,7 @@ struct curlArgs {
   struct curl_slist *headers;
   char *method;
   char *url;
+  char *postFields;
 };
 //
 // End structs
@@ -127,7 +130,7 @@ int main(void) {
     struct memory projects;
     projects.response = malloc(1);
     projects.size = 0;
-    char *allProjectsUrl = combineString(BASE_URL, "projects");
+    char *allProjectsUrl = combineString(BASE_REST_URL, "projects");
     struct curlArgs allProjectsCurlArgs = {curl, baseHeaders, "GET",
                                            allProjectsUrl};
     cJSON *projectsJson = makeRequest(allProjectsCurlArgs);
@@ -191,9 +194,9 @@ int main(void) {
         char *projectID = projectIDJson->valuestring;
         char *tasksUrl;
         if (strcmp(projectID, "999") == 0) {
-          tasksUrl = combineString(BASE_URL, "tasks/?filter=today");
+          tasksUrl = combineString(BASE_REST_URL, "tasks/?filter=today");
         } else {
-          tasksUrl = combineString(BASE_URL, "tasks/?project_id=");
+          tasksUrl = combineString(BASE_REST_URL, "tasks/?project_id=");
           tasksUrl = combineString(tasksUrl, projectID);
         }
 
@@ -278,6 +281,12 @@ cJSON *makeRequest(struct curlArgs curlArgs) {
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&requestData);
   curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, curlArgs.method);
 
+  if (curlArgs.postFields != NULL) {
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, curlArgs.postFields);
+  } else {
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
+  }
+
   CURLcode res = curl_easy_perform(curl);
   if (res != CURLE_OK) {
     displayMessage("curl_easy_perform() failed.");
@@ -295,6 +304,7 @@ cJSON *makeRequest(struct curlArgs curlArgs) {
     if (requestsJson == NULL) {
       const char *error_ptr = cJSON_GetErrorPtr();
       if (error_ptr != NULL) {
+        // Can't use displayMessage because of `const char *`.
         clear();
         printw("%s", error_ptr);
         refresh();
@@ -355,7 +365,7 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
   WINDOW *projectWindow;
 
   // Query for list of currently open tasks
-  char *tasksUrl = combineString(BASE_URL, "tasks");
+  char *tasksUrl = combineString(BASE_REST_URL, "tasks");
   cJSON *tasksJson = makeRequest(curlArgs);
   int tasksLength = cJSON_GetArraySize(tasksJson);
 
@@ -393,6 +403,8 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
       if (!reopenTask(tasksJson, tasksMenu, curlArgs)) {
         break;
       };
+      post_menu(tasksMenu);
+      refresh();
     }
   }
 
@@ -436,25 +448,97 @@ char *getJsonValue(cJSON *json, char *key) {
 
 boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
                    struct curlArgs curlArgs) {
+  // Get information about the currently selected item
   ITEM *currentItem = current_item(tasksMenu);
   cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
   char *currentItemId = getJsonValue(currentItemJson, "id");
   if (currentItemId == NULL) {
-    displayMessage("Something went wrong when closing the task. Press any key "
-                   "to return to the projects menu.");
+    displayMessage(
+        "Something went wrong when closing the task (1). Press any key "
+        "to return to the projects menu.");
     return false;
   }
-  char *reopenTaskUrl = (char *)malloc(100);
-  strcpy(reopenTaskUrl, BASE_URL);
-  strcat(reopenTaskUrl, "tasks/");
-  strcat(reopenTaskUrl, currentItemId);
-  strcat(reopenTaskUrl, "/reopen");
 
-  struct curlArgs reopenTaskArgs = {curlArgs.curl, curlArgs.headers, "POST",
-                                    reopenTaskUrl};
+  // Create the URL
+  char *reopenTaskUrl = BASE_SYNC_URL;
+
+  // Gathering data for postFields (cJSON * -> char *)
+  cJSON *postFieldsJson = cJSON_CreateObject();
+  cJSON *commands = cJSON_CreateArray();
+  cJSON *command = cJSON_CreateObject();
+  if (postFieldsJson == NULL || commands == NULL || command == NULL) {
+    displayMessage(
+        "Something went wrong when creating JSON for request (2). Press "
+        "any key to return to the projects menu.");
+    return false;
+  }
+  cJSON_AddItemToObject(postFieldsJson, "commands", commands);
+  cJSON_AddItemToArray(commands, command);
+
+  // Type, uuid, and args
+  // uuid specifically
+  uuid_t binuuid;
+  uuid_generate_random(binuuid);
+  char *uuid = malloc(37);
+  uuid_unparse(binuuid, uuid);
+
+  cJSON *args = cJSON_CreateObject();
+  if (cJSON_AddStringToObject(command, "type", "item_update") == NULL) {
+    displayMessage(
+        "Something went wrong when creating JSON for request (3). Press "
+        "any key to return to the projects menu.");
+    return false;
+  }
+  if (cJSON_AddStringToObject(command, "uuid", uuid) == NULL) {
+    displayMessage(
+        "Something went wrong when creating JSON for request (4). Press "
+        "any key to return to the projects menu.");
+    return false;
+  }
+  // Why false and not NULL? No idea.
+  if (cJSON_AddItemToObject(command, "args", args) == false) {
+    displayMessage(
+        "Something went wrong when creating JSON for request (5). Press "
+        "any key to return to the projects menu.");
+    return false;
+  }
+
+  // Id and due fields on args
+  cJSON *due = cJSON_CreateObject();
+  if (cJSON_AddStringToObject(args, "id", currentItemId) == NULL) {
+    displayMessage(
+        "Something went wrong when creating JSON for request (6). Press "
+        "any key to return to the projects menu.");
+    return false;
+  }
+  // This is where we actually set the due date to today, thus "reopening" the
+  // task
+  if (cJSON_AddStringToObject(due, "string", "today") == NULL) {
+    displayMessage(
+        "Something went wrong when creating JSON for request (7). Press "
+        "any key to return to the projects menu.");
+    return false;
+  }
+  if (cJSON_AddItemToObject(args, "due", due) == false) {
+    displayMessage(
+        "Something went wrong when creating JSON for request (8). Press "
+        "any key to return to the projects menu.");
+    return false;
+  }
+
+  char *postFields = cJSON_PrintUnformatted(postFieldsJson);
+
+  // Making the request
+  struct curl_slist *reopenHeaders;
+  reopenHeaders = curl_slist_append(reopenHeaders, curlArgs.headers->data);
+  reopenHeaders =
+      curl_slist_append(reopenHeaders, "Content-Type: application/json");
+  reopenHeaders = curl_slist_append(reopenHeaders, "Accept: application/json");
+  struct curlArgs reopenTaskArgs = {curlArgs.curl, reopenHeaders, "POST",
+                                    reopenTaskUrl, postFields};
   cJSON *result = makeRequest(reopenTaskArgs);
+  free(uuid);
 
-  free(reopenTaskUrl);
   if (result == NULL) {
     displayMessage("Something went wrong when making the request to close the "
                    "task. Press any key to return to the projects menu.");
@@ -485,7 +569,7 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
     return NULL;
   }
   char *closeTaskUrl = (char *)malloc(100);
-  strcpy(closeTaskUrl, BASE_URL);
+  strcpy(closeTaskUrl, BASE_REST_URL);
   strcat(closeTaskUrl, "tasks/");
   strcat(closeTaskUrl, currentItemId);
   strcat(closeTaskUrl, "/close");
