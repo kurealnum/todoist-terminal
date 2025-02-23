@@ -86,6 +86,10 @@ char *getJsonValue(cJSON *json, char *key);
 // Similar logic to closeTask. We don't have to return anything, because there's
 // no UI changes to make.
 boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs);
+
+// Creates a cJSON item that looks like this:
+// https://developer.todoist.com/sync/v9/#due-dates
+cJSON *createJsonDueCommand(char *string, char *itemId);
 //
 // End Headers
 
@@ -446,23 +450,7 @@ char *getJsonValue(cJSON *json, char *key) {
   return value;
 }
 
-boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
-                   struct curlArgs curlArgs) {
-  // Get information about the currently selected item
-  ITEM *currentItem = current_item(tasksMenu);
-  cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
-  char *currentItemId = getJsonValue(currentItemJson, "id");
-  if (currentItemId == NULL) {
-    displayMessage(
-        "Something went wrong when closing the task (1). Press any key "
-        "to return to the projects menu.");
-    return false;
-  }
-
-  // Create the URL
-  char *reopenTaskUrl = BASE_SYNC_URL;
-
-  // Gathering data for postFields (cJSON * -> char *)
+cJSON *createJsonDueCommand(char *string, char *itemId) {
   cJSON *postFieldsJson = cJSON_CreateObject();
   cJSON *commands = cJSON_CreateArray();
   cJSON *command = cJSON_CreateObject();
@@ -505,7 +493,7 @@ boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
 
   // Id and due fields on args
   cJSON *due = cJSON_CreateObject();
-  if (cJSON_AddStringToObject(args, "id", currentItemId) == NULL) {
+  if (cJSON_AddStringToObject(args, "id", itemId) == NULL) {
     displayMessage(
         "Something went wrong when creating JSON for request (6). Press "
         "any key to return to the projects menu.");
@@ -513,7 +501,7 @@ boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
   }
   // This is where we actually set the due date to today, thus "reopening" the
   // task
-  if (cJSON_AddStringToObject(due, "string", "today") == NULL) {
+  if (cJSON_AddStringToObject(due, "string", string) == NULL) {
     displayMessage(
         "Something went wrong when creating JSON for request (7). Press "
         "any key to return to the projects menu.");
@@ -521,15 +509,40 @@ boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
   }
   if (cJSON_AddItemToObject(args, "due", due) == false) {
     displayMessage(
-        "Something went wrong when creating JSON for request (8). Press "
+        "Something went wrong when creating JSON for request (9). Press "
         "any key to return to the projects menu.");
+    return false;
+  }
+
+  return postFieldsJson;
+}
+
+boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
+                   struct curlArgs curlArgs) {
+  // Get information about the currently selected item
+  ITEM *currentItem = current_item(tasksMenu);
+  cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
+  char *currentItemId = getJsonValue(currentItemJson, "id");
+  if (currentItemId == NULL) {
+    displayMessage(
+        "Something went wrong when closing the task (1). Press any key "
+        "to return to the projects menu.");
+    return false;
+  }
+  char *reopenTaskUrl = BASE_SYNC_URL;
+
+  // Gathering data for postFields (cJSON * -> char *)
+  cJSON *postFieldsJson =
+      createJsonDueCommand("every day starting today", currentItemId);
+
+  if (postFieldsJson == NULL) {
     return false;
   }
 
   char *postFields = cJSON_PrintUnformatted(postFieldsJson);
 
   // Making the request
-  struct curl_slist *reopenHeaders;
+  struct curl_slist *reopenHeaders = NULL;
   reopenHeaders = curl_slist_append(reopenHeaders, curlArgs.headers->data);
   reopenHeaders =
       curl_slist_append(reopenHeaders, "Content-Type: application/json");
@@ -537,7 +550,6 @@ boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
   struct curlArgs reopenTaskArgs = {curlArgs.curl, reopenHeaders, "POST",
                                     reopenTaskUrl, postFields};
   cJSON *result = makeRequest(reopenTaskArgs);
-  free(uuid);
 
   if (result == NULL) {
     displayMessage("Something went wrong when making the request to close the "
@@ -568,16 +580,29 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
                    "to return to the projects menu.");
     return NULL;
   }
-  char *closeTaskUrl = (char *)malloc(100);
-  strcpy(closeTaskUrl, BASE_REST_URL);
-  strcat(closeTaskUrl, "tasks/");
-  strcat(closeTaskUrl, currentItemId);
-  strcat(closeTaskUrl, "/close");
+  char *closeTaskUrl = BASE_SYNC_URL;
+  cJSON *postFieldsJson =
+      createJsonDueCommand("every day starting tomorrow", currentItemId);
 
-  struct curlArgs markCompleteArgs = {curlArgs.curl, curlArgs.headers, "POST",
-                                      closeTaskUrl};
+  if (postFieldsJson == NULL) {
+    return NULL;
+  }
+
+  char *postFields = cJSON_PrintUnformatted(postFieldsJson);
+
+  // Headers
+  struct curl_slist *markCompleteHeaders = NULL;
+  markCompleteHeaders =
+      curl_slist_append(markCompleteHeaders, curlArgs.headers->data);
+  markCompleteHeaders =
+      curl_slist_append(markCompleteHeaders, "Content-Type: application/json");
+  markCompleteHeaders =
+      curl_slist_append(markCompleteHeaders, "Accept: application/json");
+  struct curlArgs markCompleteArgs = {curlArgs.curl, markCompleteHeaders,
+                                      "POST", closeTaskUrl, postFields};
+
+  // Make request
   cJSON *markCompleteJson = makeRequest(markCompleteArgs);
-  free(closeTaskUrl);
   if (markCompleteJson == NULL) {
     displayMessage("Something went wrong when making an API request to close "
                    "the task. Press any key to return to the projects menu.");
