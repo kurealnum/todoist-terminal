@@ -94,15 +94,17 @@ cJSON *createJsonDueCommand(char *string, char *itemId);
 // End Headers
 
 int main(void) {
-  // ncurses
+  // ncurses. stdscr acts as the "background", and everything else sits on top
+  // of it.
   initscr();
-  keypad(stdscr, TRUE);
   raw();
   noecho();
   printw("Loading current projects. Press q to exit.\n");
   refresh();
+
   int row, col;
   getmaxyx(stdscr, row, col);
+  keypad(stdscr, TRUE);
 
   // curl
   CURL *curl = curl_easy_init();
@@ -116,10 +118,8 @@ int main(void) {
     char *authToken = getenv("TODOIST_AUTH_TOKEN");
 
     if (authToken == NULL) {
-      printw("Unable to find auth token. Press any button to end the "
-             "program.\n");
-      refresh();
-      getch();
+      displayMessage("Unable to find auth token. Press any button to end the "
+                     "program.\n");
       curl_easy_cleanup(curl);
       curl_global_cleanup();
       endwin();
@@ -164,6 +164,7 @@ int main(void) {
 
     // Render
     clear();
+    set_menu_mark(projectsMenu, NULL);
     post_menu(projectsMenu);
     refresh();
 
@@ -350,7 +351,16 @@ MENU *renderMenuFromJson(cJSON *json, char *query) {
     if (curContent == NULL) {
       return NULL;
     }
-    items[i] = new_item(curContent->valuestring, "");
+
+    // If curPriority is NULL, we're rendering the projects menu
+    cJSON *curPriority = cJSON_GetObjectItemCaseSensitive(curItem, "priority");
+
+    if (curPriority == NULL) {
+      items[i] = new_item(curContent->valuestring, NULL);
+    } else {
+      // No idea why we need to do this for the priority field...
+      items[i] = new_item(curContent->valuestring, cJSON_Print(curPriority));
+    }
   }
   items[itemsLength] = (ITEM *)NULL;
   MENU *menu = new_menu(items);
