@@ -380,8 +380,44 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
 
   // Query for list of currently open tasks
   char *tasksUrl = combineString(BASE_REST_URL, "tasks");
-  cJSON *tasksJson = makeRequest(curlArgs);
-  int tasksLength = cJSON_GetArraySize(tasksJson);
+  cJSON *unsortedTasksJson = makeRequest(curlArgs);
+  int tasksLength = cJSON_GetArraySize(unsortedTasksJson);
+
+  // Sort array. For those of you who are algorithmically inclined, I am so, so,
+  // sorry that you have to see this. This is awful. It's kinda hard to
+  // sort in any other way, because cJSON items are basically linked lists.
+  cJSON *tasksJson = cJSON_CreateArray();
+  if (tasksJson == NULL) {
+    return;
+  }
+
+  // Todoist priorities come in the form: P1 = 4, P4 = 1. Why? Only a higher
+  // power knows.
+  // TODO
+  cJSON *task = NULL;
+  int target = 4;
+  while (cJSON_GetArraySize(tasksJson) <= tasksLength && target >= 1) {
+    int x = cJSON_GetArraySize(tasksJson);
+    cJSON_ArrayForEach(task, unsortedTasksJson) {
+      cJSON *curPriority = cJSON_GetObjectItemCaseSensitive(task, "priority");
+      if (curPriority == NULL) {
+        return;
+      }
+      if (!cJSON_IsNumber(curPriority)) {
+        return;
+      }
+      if (curPriority->valueint == target) {
+        cJSON *newTask = cJSON_CreateObject();
+        cJSON_AddStringToObject(
+            newTask, "content",
+            cJSON_GetObjectItemCaseSensitive(task, "content")->valuestring);
+        cJSON_AddItemToObject(newTask, "priority",
+                              cJSON_CreateNumber(curPriority->valueint));
+        cJSON_AddItemToArray(tasksJson, newTask);
+      }
+    }
+    target -= 1;
+  }
 
   // Get menu
   MENU *tasksMenu = renderMenuFromJson(tasksJson, "content");
@@ -392,6 +428,7 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
   // Render
   projectWindow = newwin(row, col, 0, 0);
   projectPanel = new_panel(projectWindow);
+  set_menu_mark(tasksMenu, NULL);
   update_panels();
   post_menu(tasksMenu);
   wrefresh(projectWindow);
