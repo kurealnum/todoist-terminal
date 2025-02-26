@@ -7,6 +7,7 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <curses.h>
+#include <form.h>
 #include <menu.h>
 #include <ncurses.h>
 #include <panel.h>
@@ -90,6 +91,10 @@ boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs);
 // Creates a cJSON item that looks like this:
 // https://developer.todoist.com/sync/v9/#due-dates
 cJSON *createJsonDueCommand(char *string, char *itemId);
+
+// Displays an input field to the user (clears screen). Returns the char *
+// (needs to be free()-ed) to what the user inputted.
+char *displayInputField(char *infoText);
 //
 // End Headers
 
@@ -232,6 +237,54 @@ int main(void) {
     endwin();
   }
   curl_global_cleanup();
+}
+
+char *displayInputField(char *infoText) {
+  // Fields
+  const int lineLength = 50;
+  FIELD *input[2];
+  input[0] = new_field(1, lineLength, 0, 0, 0, 0);
+  set_field_back(input[0], A_UNDERLINE);
+  input[1] = NULL;
+
+  // Forms
+  FORM *form = new_form(input);
+
+  // Render
+  clear();
+  post_form(form);
+  refresh();
+
+  // Event loop
+  int getchChar = 0;
+  char *res = malloc(lineLength + 1);
+
+  if (!res) {
+    return NULL;
+  }
+
+  int i = 0;
+  while ((getchChar = getch()) != 'q') {
+    if (getchChar == KEY_BACKSPACE) {
+      form_driver(form, REQ_DEL_PREV);
+    } else if (getchChar == KEY_ENTER || getchChar == 10) {
+      form_driver(form, REQ_VALIDATION);
+      break;
+    } else {
+      form_driver(form, getchChar);
+      // Yes, this isn't how this should be done. It's the best way though.
+      res[i] = getchChar;
+      i++;
+    }
+    refresh();
+  }
+
+  res[i] = '\0';
+
+  unpost_form(form);
+  free_form(form);
+  free_field(input[0]);
+  return res;
 }
 
 char *combineString(char *str1, char *str2) {
@@ -454,6 +507,18 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
       if (!reopenTask(tasksJson, tasksMenu, curlArgs)) {
         break;
       };
+      post_menu(tasksMenu);
+      refresh();
+    } else if (getchChar == 'i') {
+      unpost_menu(tasksMenu);
+      char *newTask = displayInputField("Enter the name of a new task.");
+      if (newTask == NULL) {
+        displayMessage("There was an error saving the ncurses field.");
+      } else {
+        displayMessage(newTask);
+      }
+      free(newTask);
+      clear();
       post_menu(tasksMenu);
       refresh();
     }
