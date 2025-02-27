@@ -511,13 +511,86 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
       refresh();
     } else if (getchChar == 'i') {
       unpost_menu(tasksMenu);
-      char *newTask = displayInputField("Enter the name of a new task.");
-      if (newTask == NULL) {
+      char *newTaskName = displayInputField("Enter the name of a new task.");
+      if (newTaskName == NULL) {
         displayMessage("There was an error saving the ncurses field.");
       } else {
-        displayMessage(newTask);
+        // Creat headers
+        struct curl_slist *createTaskHeaders = NULL;
+        createTaskHeaders =
+            curl_slist_append(createTaskHeaders, curlArgs.headers->data);
+
+        // Create Json
+        cJSON *createTaskPostFieldsJson = cJSON_CreateArray();
+        cJSON *newTask = cJSON_CreateObject();
+
+        if (!cJSON_AddItemToArray(createTaskPostFieldsJson, newTask)) {
+          displayMessage("There was an error creating the JSON. Press any key "
+                         "to return to the main menu.");
+          return;
+        }
+
+        if (!cJSON_AddStringToObject(newTask, "type", "item_add")) {
+          displayMessage("There was an error creating the JSON. Press any key "
+                         "to return to the main menu.");
+          return;
+        }
+
+        // Create and add uuid
+        uuid_t tmp_binuuid;
+        uuid_generate_random(tmp_binuuid);
+        char *tmp_uuid = malloc(37);
+        uuid_unparse(tmp_binuuid, tmp_uuid);
+        if (!cJSON_AddStringToObject(newTask, "temp_id", tmp_uuid)) {
+          displayMessage("There was an error creating the JSON. Press any key "
+                         "to return to the main menu.");
+          return;
+        }
+
+        uuid_t binuuid;
+        uuid_generate_random(binuuid);
+        char *uuid = malloc(37);
+        uuid_unparse(binuuid, uuid);
+        if (!cJSON_AddStringToObject(newTask, "uuid", uuid)) {
+          displayMessage("There was an error creating the JSON. Press any key "
+                         "to return to the main menu.");
+          return;
+        }
+
+        cJSON *args = cJSON_CreateObject();
+        if (!cJSON_AddItemToObject(newTask, "args", args)) {
+          displayMessage("There was an error creating the JSON. Press any key "
+                         "to return to the main menu.");
+          return;
+        }
+
+        if (!cJSON_AddStringToObject(args, "content", newTaskName)) {
+          displayMessage("There was an error creating the JSON. Press any key "
+                         "to return to the main menu.");
+          return;
+        }
+
+        char *commands = combineString(
+            "commands=", cJSON_PrintUnformatted(createTaskPostFieldsJson));
+
+        struct curlArgs createTaskCurlArgs = {curlArgs.curl, createTaskHeaders,
+                                              "POST", BASE_SYNC_URL, commands};
+
+        // Request
+        cJSON *result = makeRequest(createTaskCurlArgs);
+        free(commands);
+        displayMessage(cJSON_Print(result));
+        if (result == NULL) {
+          displayMessage(
+              "Something went wrong when making the request to close the "
+              "task. Press any key to return to the projects menu.");
+          return;
+        }
+        free(uuid);
+        free(tmp_uuid);
       }
-      free(newTask);
+
+      free(newTaskName);
       clear();
       post_menu(tasksMenu);
       refresh();
