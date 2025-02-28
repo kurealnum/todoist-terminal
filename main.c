@@ -95,6 +95,14 @@ cJSON *createJsonDueCommand(char *string, char *itemId);
 // Displays an input field to the user (clears screen). Returns the char *
 // (needs to be free()-ed) to what the user inputted.
 char *displayInputField(char *infoText);
+
+// Sort array. For those of you who are algorithmically inclined, I am so, so,
+// sorry that you have to see this. This is awful. It's kinda hard to
+// sort in any other way, because cJSON items are basically linked lists.
+cJSON *sortTasks(cJSON *json);
+
+// Creates a new task, returns updated array of items
+ITEM **createTask(struct curlArgs curlArgs, cJSON *tasksJson);
 //
 // End Headers
 
@@ -427,21 +435,11 @@ cJSON *getCurrentItemJson(MENU *menu, cJSON *json) {
   return currentItemJson;
 }
 
-void projectPanel(struct curlArgs curlArgs, int row, int col) {
-  PANEL *projectPanel;
-  WINDOW *projectWindow;
-
-  // Query for list of currently open tasks
-  char *tasksUrl = combineString(BASE_REST_URL, "tasks");
-  cJSON *unsortedTasksJson = makeRequest(curlArgs);
-  int tasksLength = cJSON_GetArraySize(unsortedTasksJson);
-
-  // Sort array. For those of you who are algorithmically inclined, I am so, so,
-  // sorry that you have to see this. This is awful. It's kinda hard to
-  // sort in any other way, because cJSON items are basically linked lists.
+cJSON *sortTasks(cJSON *json) {
+  int tasksLength = cJSON_GetArraySize(json);
   cJSON *tasksJson = cJSON_CreateArray();
   if (tasksJson == NULL) {
-    return;
+    return NULL;
   }
 
   // Todoist priorities come in the form: P1 = 4, P4 = 1. Why? Only a higher
@@ -450,14 +448,13 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
   cJSON *task = NULL;
   int target = 4;
   while (cJSON_GetArraySize(tasksJson) <= tasksLength && target >= 1) {
-    int x = cJSON_GetArraySize(tasksJson);
-    cJSON_ArrayForEach(task, unsortedTasksJson) {
+    cJSON_ArrayForEach(task, json) {
       cJSON *curPriority = cJSON_GetObjectItemCaseSensitive(task, "priority");
       if (curPriority == NULL) {
-        return;
+        return NULL;
       }
       if (!cJSON_IsNumber(curPriority)) {
-        return;
+        return NULL;
       }
       if (curPriority->valueint == target) {
         cJSON *newTask = cJSON_CreateObject();
@@ -472,7 +469,20 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
     target -= 1;
   }
 
+  return tasksJson;
+}
+
+void projectPanel(struct curlArgs curlArgs, int row, int col) {
+  PANEL *projectPanel;
+  WINDOW *projectWindow;
+
+  // Query for list of currently open tasks
+  char *tasksUrl = combineString(BASE_REST_URL, "tasks");
+  cJSON *unsortedTasksJson = makeRequest(curlArgs);
+
   // Get menu
+  cJSON *tasksJson = sortTasks(unsortedTasksJson);
+  int tasksLength = cJSON_GetArraySize(tasksJson);
   MENU *tasksMenu = renderMenuFromJson(tasksJson, "content");
   int menuCol = 1;
   int *menuRow = &tasksLength;
@@ -482,6 +492,7 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
   projectWindow = newwin(row, col, 0, 0);
   projectPanel = new_panel(projectWindow);
   set_menu_mark(tasksMenu, NULL);
+  clear();
   update_panels();
   post_menu(tasksMenu);
   wrefresh(projectWindow);
@@ -510,89 +521,13 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
       post_menu(tasksMenu);
       refresh();
     } else if (getchChar == 'i') {
-      unpost_menu(tasksMenu);
-      char *newTaskName = displayInputField("Enter the name of a new task.");
-      if (newTaskName == NULL) {
-        displayMessage("There was an error saving the ncurses field.");
-      } else {
-        // Creat headers
-        struct curl_slist *createTaskHeaders = NULL;
-        createTaskHeaders =
-            curl_slist_append(createTaskHeaders, curlArgs.headers->data);
-
-        // Create Json
-        cJSON *createTaskPostFieldsJson = cJSON_CreateArray();
-        cJSON *newTask = cJSON_CreateObject();
-
-        if (!cJSON_AddItemToArray(createTaskPostFieldsJson, newTask)) {
-          displayMessage("There was an error creating the JSON. Press any key "
-                         "to return to the main menu.");
-          return;
-        }
-
-        if (!cJSON_AddStringToObject(newTask, "type", "item_add")) {
-          displayMessage("There was an error creating the JSON. Press any key "
-                         "to return to the main menu.");
-          return;
-        }
-
-        // Create and add uuid
-        uuid_t tmp_binuuid;
-        uuid_generate_random(tmp_binuuid);
-        char *tmp_uuid = malloc(37);
-        uuid_unparse(tmp_binuuid, tmp_uuid);
-        if (!cJSON_AddStringToObject(newTask, "temp_id", tmp_uuid)) {
-          displayMessage("There was an error creating the JSON. Press any key "
-                         "to return to the main menu.");
-          return;
-        }
-
-        uuid_t binuuid;
-        uuid_generate_random(binuuid);
-        char *uuid = malloc(37);
-        uuid_unparse(binuuid, uuid);
-        if (!cJSON_AddStringToObject(newTask, "uuid", uuid)) {
-          displayMessage("There was an error creating the JSON. Press any key "
-                         "to return to the main menu.");
-          return;
-        }
-
-        cJSON *args = cJSON_CreateObject();
-        if (!cJSON_AddItemToObject(newTask, "args", args)) {
-          displayMessage("There was an error creating the JSON. Press any key "
-                         "to return to the main menu.");
-          return;
-        }
-
-        if (!cJSON_AddStringToObject(args, "content", newTaskName)) {
-          displayMessage("There was an error creating the JSON. Press any key "
-                         "to return to the main menu.");
-          return;
-        }
-
-        char *commands = combineString(
-            "commands=", cJSON_PrintUnformatted(createTaskPostFieldsJson));
-
-        struct curlArgs createTaskCurlArgs = {curlArgs.curl, createTaskHeaders,
-                                              "POST", BASE_SYNC_URL, commands};
-
-        // Request
-        cJSON *result = makeRequest(createTaskCurlArgs);
-        free(commands);
-        displayMessage(cJSON_Print(result));
-        if (result == NULL) {
-          displayMessage(
-              "Something went wrong when making the request to close the "
-              "task. Press any key to return to the projects menu.");
-          return;
-        }
-        free(uuid);
-        free(tmp_uuid);
+      ITEM **newItems = createTask(curlArgs, tasksJson);
+      if (!newItems) {
+        displayMessage("Creating new task failed. Press any key to return to "
+                       "the main menu.");
+        return;
       }
-
-      free(newTaskName);
-      clear();
-      post_menu(tasksMenu);
+      setItemsAndRepostMenu(tasksMenu, newItems);
       refresh();
     }
   }
@@ -610,6 +545,117 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
     free_item(taskItems[i]);
   }
   free_menu(tasksMenu);
+}
+
+ITEM **createTask(struct curlArgs curlArgs, cJSON *tasksJson) {
+  char *newTaskName = displayInputField("Enter the name of a new task.");
+  if (newTaskName == NULL) {
+    displayMessage("There was an error saving the ncurses field.");
+    return NULL;
+  } else {
+    // Create headers
+    struct curl_slist *createTaskHeaders = NULL;
+    createTaskHeaders =
+        curl_slist_append(createTaskHeaders, curlArgs.headers->data);
+
+    // Create Json
+    cJSON *createTaskPostFieldsJson = cJSON_CreateArray();
+    cJSON *newTask = cJSON_CreateObject();
+
+    if (!cJSON_AddItemToArray(createTaskPostFieldsJson, newTask)) {
+      displayMessage("There was an error creating the JSON. Press any key "
+                     "to return to the main menu.");
+      return NULL;
+    }
+
+    if (!cJSON_AddStringToObject(newTask, "type", "item_add")) {
+      displayMessage("There was an error creating the JSON. Press any key "
+                     "to return to the main menu.");
+      return NULL;
+    }
+
+    // Create and add uuid
+    uuid_t tmp_binuuid;
+    uuid_generate_random(tmp_binuuid);
+    char *tmp_uuid = malloc(37);
+    uuid_unparse(tmp_binuuid, tmp_uuid);
+    if (!cJSON_AddStringToObject(newTask, "temp_id", tmp_uuid)) {
+      displayMessage("There was an error creating the JSON. Press any key "
+                     "to return to the main menu.");
+      return NULL;
+    }
+
+    uuid_t binuuid;
+    uuid_generate_random(binuuid);
+    char *uuid = malloc(37);
+    uuid_unparse(binuuid, uuid);
+    if (!cJSON_AddStringToObject(newTask, "uuid", uuid)) {
+      displayMessage("There was an error creating the JSON. Press any key "
+                     "to return to the main menu.");
+      return NULL;
+    }
+
+    cJSON *args = cJSON_CreateObject();
+    if (!cJSON_AddItemToObject(newTask, "args", args)) {
+      displayMessage("There was an error creating the JSON. Press any key "
+                     "to return to the main menu.");
+      return NULL;
+    }
+
+    if (!cJSON_AddStringToObject(args, "content", newTaskName)) {
+      displayMessage("There was an error creating the JSON. Press any key "
+                     "to return to the main menu.");
+      return NULL;
+    }
+
+    char *commands = combineString(
+        "commands=", cJSON_PrintUnformatted(createTaskPostFieldsJson));
+
+    struct curlArgs createTaskCurlArgs = {curlArgs.curl, createTaskHeaders,
+                                          "POST", BASE_SYNC_URL, commands};
+
+    // Request
+    cJSON *result = makeRequest(createTaskCurlArgs);
+    free(commands);
+    if (result == NULL) {
+      displayMessage(
+          "Something went wrong when making the request to close the "
+          "task. Press any key to return to the projects menu.");
+      return NULL;
+    }
+    free(uuid);
+    free(tmp_uuid);
+
+    // Create new items (will need to be free()-ed)
+    int curItemsLength = cJSON_GetArraySize(tasksJson);
+
+    // Make space for new item (hence + 2)
+    ITEM **newItems =
+        (ITEM **)malloc((curItemsLength + 2) * sizeof(struct ITEM *));
+    for (int i = 0; i < curItemsLength; i++) {
+      cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
+      if (curItem == NULL) {
+        displayMessage("Something went wrong when updating the Ncurses menu."
+                       "Press any key to return to the projects menu. (Err 1)");
+        return NULL;
+      }
+      cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, "content");
+      if (curContent == NULL) {
+        displayMessage("Something went wrong when updating the Ncurses menu."
+                       "Press any key to return to the projects menu. (Err 2)");
+        return NULL;
+      }
+      newItems[i] = new_item(curContent->valuestring, "");
+    }
+
+    // maximum length a user can enter is 50
+    newItems[curItemsLength] = new_item(newTaskName, "");
+    newItems[curItemsLength + 1] = (ITEM *)NULL;
+
+    return newItems;
+  }
+
+  free(newTaskName);
 }
 
 void setItemsAndRepostMenu(MENU *menu, ITEM **items) {
