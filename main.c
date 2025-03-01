@@ -103,6 +103,16 @@ cJSON *sortTasks(cJSON *json);
 
 // Creates a new task, returns updated array of items
 ITEM **createTask(struct curlArgs curlArgs, cJSON *tasksJson);
+
+// Creates new items from JSON. Needs to be free()-ed and to have an NULL
+// appended to the end of the return value.
+ITEM **createItemsFromJson(cJSON *json, int customLength, char *query);
+
+// Converts a char (int) to a char *. Needs to be free()-ed.
+char *itos(char c);
+
+// Very similar to getJsonValue, but returns the valueint instead.
+int getJsonIntValue(cJSON *json, char *key);
 //
 // End Headers
 
@@ -400,29 +410,8 @@ MENU *renderMenuFromJson(cJSON *json, char *query) {
     return blankMenu;
   }
 
-  ITEM **items;
+  ITEM **items = createItemsFromJson(json, itemsLength + 1, query);
 
-  items = (ITEM **)malloc((itemsLength + 1) * sizeof(struct ITEM *));
-  for (int i = 0; i < itemsLength; i++) {
-    cJSON *curItem = cJSON_GetArrayItem(json, i);
-    if (curItem == NULL) {
-      return NULL;
-    }
-    cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, query);
-    if (curContent == NULL) {
-      return NULL;
-    }
-
-    // If curPriority is NULL, we're rendering the projects menu
-    cJSON *curPriority = cJSON_GetObjectItemCaseSensitive(curItem, "priority");
-
-    if (curPriority == NULL) {
-      items[i] = new_item(curContent->valuestring, NULL);
-    } else {
-      // No idea why we need to do this for the priority field...
-      items[i] = new_item(curContent->valuestring, cJSON_Print(curPriority));
-    }
-  }
   items[itemsLength] = (ITEM *)NULL;
   MENU *menu = new_menu(items);
   return menu;
@@ -449,6 +438,7 @@ cJSON *sortTasks(cJSON *json) {
   int target = 4;
   while (cJSON_GetArraySize(tasksJson) <= tasksLength && target >= 1) {
     cJSON_ArrayForEach(task, json) {
+      // Get all the values that we're going to need
       cJSON *curPriority = cJSON_GetObjectItemCaseSensitive(task, "priority");
       if (curPriority == NULL) {
         return NULL;
@@ -456,13 +446,31 @@ cJSON *sortTasks(cJSON *json) {
       if (!cJSON_IsNumber(curPriority)) {
         return NULL;
       }
+
+      cJSON *curContent = cJSON_GetObjectItemCaseSensitive(task, "content");
+      if (curContent == NULL) {
+        return NULL;
+      }
+      if (!cJSON_IsString(curContent)) {
+        return NULL;
+      }
+
+      cJSON *curId = cJSON_GetObjectItemCaseSensitive(task, "id");
+      if (curId == NULL) {
+        return NULL;
+      }
+      // curId is a inputted as a string for some reason
+      if (!cJSON_IsString(curId)) {
+        return NULL;
+      }
+
       if (curPriority->valueint == target) {
         cJSON *newTask = cJSON_CreateObject();
-        cJSON_AddStringToObject(
-            newTask, "content",
-            cJSON_GetObjectItemCaseSensitive(task, "content")->valuestring);
         cJSON_AddItemToObject(newTask, "priority",
                               cJSON_CreateNumber(curPriority->valueint));
+        cJSON_AddStringToObject(newTask, "content", curContent->valuestring);
+        cJSON_AddItemToObject(newTask, "id",
+                              cJSON_CreateNumber(curId->valueint));
         cJSON_AddItemToArray(tasksJson, newTask);
       }
     }
@@ -488,10 +496,11 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
   int *menuRow = &tasksLength;
   int res = set_menu_format(tasksMenu, *menuRow, menuCol);
 
-  // Render
   projectWindow = newwin(row, col, 0, 0);
   projectPanel = new_panel(projectWindow);
   set_menu_mark(tasksMenu, NULL);
+
+  // Render
   clear();
   update_panels();
   post_menu(tasksMenu);
@@ -527,6 +536,7 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
                        "the main menu.");
         return;
       }
+
       setItemsAndRepostMenu(tasksMenu, newItems);
       refresh();
     }
@@ -626,41 +636,64 @@ ITEM **createTask(struct curlArgs curlArgs, cJSON *tasksJson) {
     free(uuid);
     free(tmp_uuid);
 
-    // Create new items (will need to be free()-ed)
     int curItemsLength = cJSON_GetArraySize(tasksJson);
 
     // Make space for new item (hence + 2)
     ITEM **newItems =
-        (ITEM **)malloc((curItemsLength + 2) * sizeof(struct ITEM *));
-    for (int i = 0; i < curItemsLength; i++) {
-      cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
-      if (curItem == NULL) {
-        displayMessage("Something went wrong when updating the Ncurses menu."
-                       "Press any key to return to the projects menu. (Err 1)");
-        return NULL;
-      }
-      cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, "content");
-      if (curContent == NULL) {
-        displayMessage("Something went wrong when updating the Ncurses menu."
-                       "Press any key to return to the projects menu. (Err 2)");
-        return NULL;
-      }
-      newItems[i] = new_item(curContent->valuestring, "");
-    }
+        createItemsFromJson(tasksJson, curItemsLength + 2, "content");
 
-    // maximum length a user can enter is 50
-    newItems[curItemsLength] = new_item(newTaskName, "");
+    newItems[curItemsLength] = new_item(newTaskName, "1");
     newItems[curItemsLength + 1] = (ITEM *)NULL;
 
     return newItems;
   }
+}
 
-  free(newTaskName);
+ITEM **createItemsFromJson(cJSON *json, int customLength, char *query) {
+  ITEM **newItems = (ITEM **)malloc(customLength * sizeof(struct ITEM *));
+  int itemsLength = cJSON_GetArraySize(json);
+
+  for (int i = 0; i < itemsLength; i++) {
+    cJSON *curItem = cJSON_GetArrayItem(json, i);
+    if (curItem == NULL) {
+      return NULL;
+    }
+    cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, query);
+    if (curContent == NULL) {
+      return NULL;
+    }
+
+    // If curPriority is NULL, we're rendering the projects menu
+    cJSON *curPriority = cJSON_GetObjectItemCaseSensitive(curItem, "priority");
+
+    if (curPriority == NULL) {
+      newItems[i] = new_item(curContent->valuestring, NULL);
+    } else {
+      // No idea why we need to do this for the priority field...
+      newItems[i] = new_item(curContent->valuestring, cJSON_Print(curPriority));
+    }
+  }
+
+  return newItems;
 }
 
 void setItemsAndRepostMenu(MENU *menu, ITEM **items) {
   unpost_menu(menu);
+
+  // Free old menu items
+  ITEM **oldItems = menu_items(menu);
+  int i = 0;
+  while (oldItems[i] != NULL) {
+    free(oldItems[i]);
+    i++;
+  }
+  free(oldItems[i]);
+
+  // Hopefully this doesn't shoot me in the foot later on
+  int row, col;
+  getmaxyx(stdscr, row, col);
   set_menu_items(menu, items);
+  set_menu_format(menu, row, 1);
   post_menu(menu);
 }
 
@@ -668,17 +701,27 @@ char *getJsonValue(cJSON *json, char *key) {
   cJSON *keyValuePair = cJSON_GetObjectItemCaseSensitive(json, key);
   if (keyValuePair == NULL) {
     displayMessage("Something went wrong when closing the task. Press any "
-                   "key to return to the projects menu.");
+                   "key to return to the projects menu. (getJsonValue 1)");
     return NULL;
   }
   char *value = keyValuePair->valuestring;
   if (value == NULL) {
     displayMessage("Something went wrong when closing the task. Press any "
-                   "key to return to the projects menu.");
+                   "key to return to the projects menu. (getJsonValue 2)");
     return NULL;
   }
 
   return value;
+}
+
+int getJsonIntValue(cJSON *json, char *key) {
+  cJSON *keyValuePair = cJSON_GetObjectItemCaseSensitive(json, key);
+  if (keyValuePair == NULL) {
+    displayMessage("Something went wrong when closing the task. Press any "
+                   "key to return to the projects menu. (getJsonIntValue 1)");
+    return -1;
+  }
+  return keyValuePair->valueint;
 }
 
 cJSON *createJsonDueCommand(char *string, char *itemId) {
@@ -755,9 +798,8 @@ boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
   cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
   char *currentItemId = getJsonValue(currentItemJson, "id");
   if (currentItemId == NULL) {
-    displayMessage(
-        "Something went wrong when closing the task (1). Press any key "
-        "to return to the projects menu.");
+    displayMessage("Something went wrong when closing the task. Press any key "
+                   "to return to the projects menu. (reopenTask 1)");
     return false;
   }
   char *reopenTaskUrl = BASE_SYNC_URL;
@@ -791,6 +833,13 @@ boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
   return true;
 }
 
+char *itos(char c) {
+  char *res = (char *)malloc(2);
+  res[0] = c;
+  res[1] = '\0';
+  return res;
+}
+
 ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
   ITEM *currentItem = current_item(tasksMenu);
 
@@ -802,15 +851,11 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
   cJSON *currentItemJson = getCurrentItemJson(tasksMenu, tasksJson);
   if (currentItemJson == NULL) {
     displayMessage("Something went wrong when closing the task. Press any "
-                   "key to return to the projects menu.");
+                   "key to return to the projects menu (closeTask 1).");
     return NULL;
   }
-  char *currentItemId = getJsonValue(currentItemJson, "id");
-  if (currentItemId == NULL) {
-    displayMessage("Something went wrong when closing the task. Press any key "
-                   "to return to the projects menu.");
-    return NULL;
-  }
+  int currentItemIdInt = getJsonIntValue(currentItemJson, "id");
+  char *currentItemId = itos(currentItemIdInt);
   char *closeTaskUrl = BASE_SYNC_URL;
   cJSON *postFieldsJson =
       createJsonDueCommand("every day starting tomorrow", currentItemId);
@@ -868,23 +913,9 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
   // Create new items (will need to be free()-ed)
   int newItemsLength = cJSON_GetArraySize(tasksJson);
   ITEM **newItems =
-      (ITEM **)malloc((newItemsLength + 1) * sizeof(struct ITEM *));
-  for (int i = 0; i < newItemsLength; i++) {
-    cJSON *curItem = cJSON_GetArrayItem(tasksJson, i);
-    if (curItem == NULL) {
-      displayMessage("Something went wrong when updating the Ncurses menu."
-                     "Press any key to return to the projects menu. (Err 1)");
-      return NULL;
-    }
-    cJSON *curContent = cJSON_GetObjectItemCaseSensitive(curItem, "content");
-    if (curContent == NULL) {
-      displayMessage("Something went wrong when updating the Ncurses menu."
-                     "Press any key to return to the projects menu. (Err 2)");
-      return NULL;
-    }
-    newItems[i] = new_item(curContent->valuestring, "");
-  }
+      createItemsFromJson(tasksJson, newItemsLength + 1, "content");
   newItems[newItemsLength] = (ITEM *)NULL;
 
+  free(currentItemId);
   return newItems;
 }
