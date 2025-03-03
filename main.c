@@ -108,9 +108,6 @@ ITEM **createTask(struct curlArgs curlArgs, cJSON *tasksJson);
 // appended to the end of the return value.
 ITEM **createItemsFromJson(cJSON *json, int customLength, char *query);
 
-// Converts a char (int) to a char *. Needs to be free()-ed.
-char *itos(char c);
-
 // Very similar to getJsonValue, but returns the valueint instead.
 int getJsonIntValue(cJSON *json, char *key);
 //
@@ -469,8 +466,10 @@ cJSON *sortTasks(cJSON *json) {
         cJSON_AddItemToObject(newTask, "priority",
                               cJSON_CreateNumber(curPriority->valueint));
         cJSON_AddStringToObject(newTask, "content", curContent->valuestring);
-        cJSON_AddItemToObject(newTask, "id",
-                              cJSON_CreateNumber(curId->valueint));
+
+        // The id is a string because why should we bother going to an int and
+        // then back?
+        cJSON_AddStringToObject(newTask, "id", curId->valuestring);
         cJSON_AddItemToArray(tasksJson, newTask);
       }
     }
@@ -833,13 +832,6 @@ boolean reopenTask(cJSON *tasksJson, MENU *tasksMenu,
   return true;
 }
 
-char *itos(char c) {
-  char *res = (char *)malloc(2);
-  res[0] = c;
-  res[1] = '\0';
-  return res;
-}
-
 ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
   ITEM *currentItem = current_item(tasksMenu);
 
@@ -854,9 +846,9 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
                    "key to return to the projects menu (closeTask 1).");
     return NULL;
   }
-  int currentItemIdInt = getJsonIntValue(currentItemJson, "id");
-  char *currentItemId = itos(currentItemIdInt);
-  char *closeTaskUrl = BASE_SYNC_URL;
+
+  char *currentItemId = getJsonValue(currentItemJson, "id");
+
   cJSON *postFieldsJson =
       createJsonDueCommand("every day starting tomorrow", currentItemId);
 
@@ -867,6 +859,7 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
   char *postFields = cJSON_PrintUnformatted(postFieldsJson);
 
   // Headers
+  char *closeTaskUrl = BASE_SYNC_URL;
   struct curl_slist *markCompleteHeaders = NULL;
   markCompleteHeaders =
       curl_slist_append(markCompleteHeaders, curlArgs.headers->data);
@@ -916,6 +909,5 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
       createItemsFromJson(tasksJson, newItemsLength + 1, "content");
   newItems[newItemsLength] = (ITEM *)NULL;
 
-  free(currentItemId);
   return newItems;
 }
