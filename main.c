@@ -110,6 +110,10 @@ ITEM **createItemsFromJson(cJSON *json, int customLength, char *query);
 
 // Very similar to getJsonValue, but returns the valueint instead.
 int getJsonIntValue(cJSON *json, char *key);
+
+// Deletes a task, returns list of new items if successfull, and null if it
+// isn't.
+ITEM **deleteTask(cJSON *tasksJson, struct curlArgs curlArgs, MENU *curMenu);
 //
 // End Headers
 
@@ -151,9 +155,6 @@ int main(void) {
     baseHeaders = curl_slist_append(baseHeaders, authHeader);
 
     // Get list of projects
-    struct memory projects;
-    projects.response = malloc(1);
-    projects.size = 0;
     char *allProjectsUrl = combineString(BASE_REST_URL, "projects");
     struct curlArgs allProjectsCurlArgs = {curl, baseHeaders, "GET",
                                            allProjectsUrl};
@@ -245,7 +246,6 @@ int main(void) {
     free(authHeader);
     free(projectsMenu);
     free(projectsJson);
-    free(projects.response);
     for (int i = 0; i < numOfProjects; i++) {
       free(projectsItems[i]);
     }
@@ -538,6 +538,15 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
 
       setItemsAndRepostMenu(tasksMenu, newItems);
       refresh();
+    } else if (getchChar == 'd') {
+      ITEM **newItems = deleteTask(tasksJson, curlArgs, tasksMenu);
+
+      // If deleteTask returns NULL, it doesn't necesarrily mean that anything
+      // failed. It just means that the user might've closed out of it.
+      if (newItems) {
+        setItemsAndRepostMenu(tasksMenu, newItems);
+        refresh();
+      }
     }
   }
 
@@ -910,4 +919,60 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
   newItems[newItemsLength] = (ITEM *)NULL;
 
   return newItems;
+}
+
+ITEM **deleteTask(cJSON *tasksJson, struct curlArgs curlArgs, MENU *curMenu) {
+  clear();
+  printw("Are you sure you want to delete this task?");
+
+  int getchChar = getch();
+  if (getchChar == 'y') {
+    // Assemble url
+
+    cJSON *currentItemJson = getCurrentItemJson(curMenu, tasksJson);
+    if (currentItemJson == NULL) {
+      displayMessage("Something went wrong when closing the task. Press any "
+                     "key to return to the projects menu (deleteTask 1).");
+      return NULL;
+    }
+
+    char *currentItemId = getJsonValue(currentItemJson, "id");
+    char *url =
+        combineString(BASE_REST_URL, combineString("tasks/", currentItemId));
+
+    // Assemble request args
+    struct curlArgs deleteTaskCurlArgs = {curlArgs.curl, curlArgs.headers,
+                                          "DELETE", url, curlArgs.postFields};
+
+    cJSON *request = makeRequest(deleteTaskCurlArgs);
+
+    if (!request) {
+      displayMessage("Error making request. Press any key to return to the "
+                     "main menu (deleteTask 2).");
+      return NULL;
+    }
+
+    int toRemoveIdx = 0;
+    cJSON *task = NULL;
+    cJSON_ArrayForEach(task, tasksJson) {
+      char *curId = getJsonValue(task, "id");
+      if (strcmp(curId, currentItemId) == 0) {
+        break;
+      }
+      toRemoveIdx++;
+    }
+
+    cJSON_DeleteItemFromArray(tasksJson, toRemoveIdx);
+
+    int newLength = cJSON_GetArraySize(tasksJson);
+    ITEM **newItems = createItemsFromJson(tasksJson, newLength, "content");
+    newItems[newLength] = NULL;
+
+    free(url);
+
+    return newItems;
+
+  } else {
+    return NULL;
+  }
 }
