@@ -551,8 +551,8 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
       // failed. It just means that the user might've closed out of it.
       if (newItems) {
         setItemsAndRepostMenu(tasksMenu, newItems);
-        refresh();
       }
+      refresh();
     }
   }
 
@@ -650,8 +650,8 @@ ITEM **createTask(struct curlArgs curlArgs, cJSON *tasksJson) {
           "task. Press any key to return to the projects menu.");
       return NULL;
     }
+    // tmp_uuid will be free later on
     free(uuid);
-    free(tmp_uuid);
 
     int curItemsLength = cJSON_GetArraySize(tasksJson);
 
@@ -660,6 +660,36 @@ ITEM **createTask(struct curlArgs curlArgs, cJSON *tasksJson) {
         createItemsFromJson(tasksJson, curItemsLength + 2, "content");
 
     newItems[curItemsLength] = new_item(newTaskName, "1");
+
+    struct taskMetaData *newTaskMetaData =
+        (struct taskMetaData *)malloc(sizeof(struct taskMetaData));
+    newTaskMetaData->content = newTaskName;
+
+    // Get and set new task's id from response
+    cJSON *tmpIdMapping =
+        cJSON_GetObjectItemCaseSensitive(result, "temp_id_mapping");
+
+    if (!tmpIdMapping) {
+      displayMessage("Something went wrong when accessing the id of the new "
+                     "task. Press any key to return to the projects menu.");
+      return NULL;
+    }
+
+    cJSON *idJson = cJSON_GetObjectItemCaseSensitive(tmpIdMapping, tmp_uuid);
+
+    if (!idJson) {
+      displayMessage("Something went wrong when accessing the id of the new "
+                     "task. Press any key to return to the projects menu.");
+      return NULL;
+    }
+
+    free(tmp_uuid);
+    char *id = idJson->valuestring;
+
+    newTaskMetaData->id = id;
+    newTaskMetaData->priority = 1;
+    set_item_userptr(newItems[curItemsLength], newTaskMetaData);
+
     newItems[curItemsLength + 1] = (ITEM *)NULL;
 
     return newItems;
@@ -956,16 +986,20 @@ ITEM **deleteTask(cJSON *tasksJson, struct curlArgs curlArgs, MENU *curMenu) {
 
   int getchChar = getch();
   if (getchChar == 'y') {
-    // Assemble url
 
-    cJSON *currentItemJson = getCurrentItemJson(curMenu, tasksJson);
-    if (currentItemJson == NULL) {
-      displayMessage("Something went wrong when closing the task. Press any "
-                     "key to return to the projects menu (deleteTask 1).");
+    struct taskMetaData *currentTaskMetaData =
+        (struct taskMetaData *)item_userptr(current_item(curMenu));
+
+    if (!currentTaskMetaData) {
       return NULL;
     }
 
-    char *currentItemId = getJsonValue(currentItemJson, "id");
+    char *currentItemId = currentTaskMetaData->id;
+
+    if (!currentItemId) {
+      return NULL;
+    }
+
     char *url =
         combineString(BASE_REST_URL, combineString("tasks/", currentItemId));
 
