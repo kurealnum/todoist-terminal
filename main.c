@@ -42,6 +42,12 @@ struct curlArgs {
   char *url;
   char *postFields;
 };
+
+struct taskMetaData {
+  char *id;
+  char *content;
+  int priority;
+};
 //
 // End structs
 
@@ -561,6 +567,9 @@ void projectPanel(struct curlArgs curlArgs, int row, int col) {
   free(tasksJson);
   for (int i = 0; i < tasksLength; i++) {
     free_item(taskItems[i]);
+    struct taskMetaData *toFreeTMD =
+        (struct taskMetaData *)item_userptr(taskItems[i]);
+    free(toFreeTMD);
   }
   free_menu(tasksMenu);
 }
@@ -677,8 +686,25 @@ ITEM **createItemsFromJson(cJSON *json, int customLength, char *query) {
     if (curPriority == NULL) {
       newItems[i] = new_item(curContent->valuestring, NULL);
     } else {
+      cJSON *curId = cJSON_GetObjectItemCaseSensitive(curItem, "id");
+      if (!curId) {
+        return NULL;
+      }
+
+      if (!cJSON_IsString(curId)) {
+        return NULL;
+      }
+
       // No idea why we need to do this for the priority field...
       newItems[i] = new_item(curContent->valuestring, cJSON_Print(curPriority));
+
+      // Add metadata to userptr (DON'T FORGET TO FREE() THIS)
+      struct taskMetaData *newTaskMetaData =
+          (struct taskMetaData *)malloc(sizeof(struct taskMetaData *));
+      newTaskMetaData->content = curContent->string;
+      newTaskMetaData->priority = curPriority->valueint;
+      newTaskMetaData->id = curId->valuestring;
+      set_item_userptr(newItems[i], newTaskMetaData);
     }
   }
 
@@ -906,6 +932,9 @@ ITEM **closeTask(cJSON *tasksJson, MENU *tasksMenu, struct curlArgs curlArgs) {
   ITEM **taskItems = menu_items(tasksMenu);
   for (int i = 0; i < tasksLength; i++) {
     free_item(taskItems[i]);
+    struct taskMetaData *toFreeTMD =
+        (struct taskMetaData *)item_userptr(taskItems[i]);
+    free(toFreeTMD);
   }
 
   // Delete completed task
