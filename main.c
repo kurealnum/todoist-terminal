@@ -288,6 +288,8 @@ char *displayInputField(char *infoText) {
   while ((getchChar = getch()) != 'q') {
     if (getchChar == KEY_BACKSPACE) {
       form_driver(form, REQ_DEL_PREV);
+      res[i] = '\0';
+      i--;
     } else if (getchChar == KEY_ENTER || getchChar == 10) {
       form_driver(form, REQ_VALIDATION);
       break;
