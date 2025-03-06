@@ -200,9 +200,9 @@ int main(void) {
 
     int getchChar;
     while ((getchChar = getch()) != 'q') {
-      if (getchChar == KEY_DOWN || getchChar == 'j') {
+      if (getchChar == 'j') {
         menu_driver(projectsMenu, REQ_DOWN_ITEM);
-      } else if (getchChar == KEY_UP || getchChar == 'k') {
+      } else if (KEY_UP || getchChar == 'k') {
         menu_driver(projectsMenu, REQ_UP_ITEM);
       } else if (getchChar == 'q') {
         break;
